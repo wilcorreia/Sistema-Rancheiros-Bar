@@ -36,6 +36,7 @@ export interface Order {
   tableId: string;
   tableName: string;
   waiterName: string;
+  customerName?: string;
   items: OrderItem[];
   total: number;
   createdAt: string;

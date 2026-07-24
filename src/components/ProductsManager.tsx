@@ -22,24 +22,62 @@ export const ProductsManager: React.FC<ProductsManagerProps> = ({
 
   // Form State
   const [name, setName] = useState('');
-  const [category, setCategory] = useState('Lanches');
+  const [category, setCategory] = useState('Espetinho');
+  const [isCustomCategory, setIsCustomCategory] = useState(false);
+  const [customCategory, setCustomCategory] = useState('');
   const [price, setPrice] = useState<number | ''>('');
   const [description, setDescription] = useState('');
   const [available, setAvailable] = useState(true);
   const [printDestination, setPrintDestination] = useState<PrintDestination>('KITCHEN');
 
-  const categories = ['TODOS', ...Array.from(new Set(products.map(p => p.category)))];
+  // Waiters State
+  const [waiters, setWaiters] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('waitersList');
+      return saved ? JSON.parse(saved) : ['Rancheiros', 'Carlos', 'Ana', 'Pedro'];
+    } catch {
+      return ['Rancheiros', 'Carlos', 'Ana', 'Pedro'];
+    }
+  });
+  const [newWaiterName, setNewWaiterName] = useState('');
+  const [showWaiterManager, setShowWaiterManager] = useState(false);
+
+  const existingCategories = Array.from<string>(
+    new Set(products.map(p => p.category?.trim()).filter(Boolean))
+  );
+  if (!existingCategories.length) {
+    existingCategories.push('Espetinho', 'Jantinha', 'Acompanhamentos', 'Bebidas', 'Sobremesas');
+  }
+
+  const categories = ['TODOS', ...existingCategories];
 
   const filteredProducts = products.filter(p => {
-    const matchesCategory = selectedCategory === 'TODOS' || p.category === selectedCategory;
+    const matchesCategory = selectedCategory === 'TODOS' || (p.category?.trim() || 'Geral') === selectedCategory;
     const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          p.description.toLowerCase().includes(searchQuery.toLowerCase());
+                          (p.description && p.description.toLowerCase().includes(searchQuery.toLowerCase()));
     return matchesCategory && matchesSearch;
   });
 
+  const handleAddWaiter = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newWaiterName.trim()) return;
+    const updated = [...waiters.filter(w => w.toLowerCase() !== newWaiterName.trim().toLowerCase()), newWaiterName.trim()];
+    setWaiters(updated);
+    localStorage.setItem('waitersList', JSON.stringify(updated));
+    setNewWaiterName('');
+  };
+
+  const handleDeleteWaiter = (waiter: string) => {
+    const updated = waiters.filter(w => w !== waiter);
+    setWaiters(updated);
+    localStorage.setItem('waitersList', JSON.stringify(updated));
+  };
+
   const handleResetForm = () => {
     setName('');
-    setCategory('Lanches');
+    setCategory(existingCategories[0] || 'Espetinho');
+    setIsCustomCategory(false);
+    setCustomCategory('');
     setPrice('');
     setDescription('');
     setAvailable(true);
@@ -51,7 +89,14 @@ export const ProductsManager: React.FC<ProductsManagerProps> = ({
   const handleOpenEdit = (product: Product) => {
     setEditingProductId(product.id);
     setName(product.name);
-    setCategory(product.category);
+    if (existingCategories.includes(product.category)) {
+      setCategory(product.category);
+      setIsCustomCategory(false);
+    } else {
+      setCategory('__NEW__');
+      setIsCustomCategory(true);
+      setCustomCategory(product.category);
+    }
     setPrice(product.price);
     setDescription(product.description);
     setAvailable(product.available);
@@ -63,21 +108,23 @@ export const ProductsManager: React.FC<ProductsManagerProps> = ({
     e.preventDefault();
     if (!name.trim() || price === '') return;
 
+    const finalCategory = isCustomCategory ? customCategory.trim() || 'Geral' : category;
+
     if (editingProductId) {
       onUpdateProduct(editingProductId, {
-        name,
-        category,
+        name: name.trim(),
+        category: finalCategory,
         price: Number(price),
-        description,
+        description: description.trim(),
         available,
         printDestination
       });
     } else {
       onAddProduct({
-        name,
-        category,
+        name: name.trim(),
+        category: finalCategory,
         price: Number(price),
-        description,
+        description: description.trim(),
         available,
         printDestination
       });
@@ -302,6 +349,57 @@ export const ProductsManager: React.FC<ProductsManagerProps> = ({
             ))}
           </div>
         </div>
+
+        {/* Waiters / Garçons Manager Block */}
+        <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3">
+          <div className="flex justify-between items-center">
+            <div>
+              <span className="font-extrabold text-amber-400 text-xs block uppercase tracking-wider">Garçons & Atendentes</span>
+              <span className="text-[11px] text-slate-400">Cadastre os nomes dos garçons para seleção nos pedidos ({waiters.length} ativos).</span>
+            </div>
+            <button
+              onClick={() => setShowWaiterManager(!showWaiterManager)}
+              className="bg-amber-500/20 hover:bg-amber-500 text-amber-400 hover:text-slate-950 font-bold px-3 py-1.5 rounded-xl border border-amber-500/30 transition text-xs"
+            >
+              {showWaiterManager ? 'Ocultar' : '+ Cadastrar Garçom'}
+            </button>
+          </div>
+
+          {showWaiterManager && (
+            <form onSubmit={handleAddWaiter} className="flex gap-2 pt-2 border-t border-slate-800">
+              <input
+                type="text"
+                placeholder="Nome do garçom (ex: Rancheiros, João)..."
+                value={newWaiterName}
+                onChange={e => setNewWaiterName(e.target.value)}
+                className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white outline-none focus:border-amber-400"
+              />
+              <button
+                type="submit"
+                className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-4 py-1.5 rounded-xl text-xs"
+              >
+                Salvar Garçom
+              </button>
+            </form>
+          )}
+
+          <div className="flex flex-wrap gap-2 pt-1">
+            {waiters.map(w => (
+              <div key={w} className="bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl flex items-center space-x-2 text-xs">
+                <span className="font-semibold text-slate-200">{w}</span>
+                {waiters.length > 1 && (
+                  <button
+                    onClick={() => handleDeleteWaiter(w)}
+                    className="text-slate-500 hover:text-red-400 text-[11px] font-medium ml-1"
+                    title="Excluir Garçom"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* Controls Header */}
@@ -444,14 +542,37 @@ export const ProductsManager: React.FC<ProductsManagerProps> = ({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">Categoria</label>
-                  <input
-                    type="text"
-                    placeholder="Lanches, Bebidas, Porções..."
-                    value={category}
-                    onChange={e => setCategory(e.target.value)}
-                    className="w-full p-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-amber-500 outline-none"
-                    required
-                  />
+                  <select
+                    value={isCustomCategory ? '__NEW__' : category}
+                    onChange={e => {
+                      if (e.target.value === '__NEW__') {
+                        setIsCustomCategory(true);
+                        setCustomCategory('');
+                      } else {
+                        setIsCustomCategory(false);
+                        setCategory(e.target.value);
+                      }
+                    }}
+                    className="w-full p-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-amber-500 outline-none font-bold"
+                  >
+                    {existingCategories.map(cat => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                    <option value="__NEW__">+ Outra (Digitar Categoria)...</option>
+                  </select>
+
+                  {isCustomCategory && (
+                    <input
+                      type="text"
+                      placeholder="Digite a nova categoria..."
+                      value={customCategory}
+                      onChange={e => setCustomCategory(e.target.value)}
+                      className="w-full p-2.5 rounded-xl border border-amber-400 mt-1.5 focus:ring-2 focus:ring-amber-500 outline-none"
+                      required
+                    />
+                  )}
                 </div>
 
                 <div>

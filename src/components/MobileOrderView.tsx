@@ -9,6 +9,7 @@ interface MobileOrderViewProps {
   onSubmitOrder: (orderData: {
     tableId: string;
     waiterName: string;
+    customerName?: string;
     items: { productId: string; name: string; price: number; quantity: number; notes: string; destination: PrintDestination }[];
     customerCount?: number;
   }, autoPrint?: boolean) => void;
@@ -29,23 +30,39 @@ export const MobileOrderView: React.FC<MobileOrderViewProps> = ({
   onCancel
 }) => {
   const [selectedTableId, setSelectedTableId] = useState<string>(preselectedTableId || (tables[0]?.id || ''));
-  const [waiterName, setWaiterName] = useState<string>(localStorage.getItem('waiterName') || 'Carlos');
-  const [selectedCategory, setSelectedCategory] = useState<string>('TODOS');
+  const [waiterName, setWaiterName] = useState<string>(() => localStorage.getItem('waiterName') || 'Rancheiros');
+  const [customerName, setCustomerName] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>({});
+  
+  const allCategories: string[] = Array.from<string>(new Set(products.map(p => (p.category?.trim() || 'Geral'))));
+
+  // Default all categories to COLLAPSED
+  const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>(() => {
+    const initialMap: Record<string, boolean> = {};
+    allCategories.forEach(c => { initialMap[c] = true; });
+    return initialMap;
+  });
+
   const [cart, setCart] = useState<CartItem[]>([]);
   const [activeItemForNotes, setActiveItemForNotes] = useState<Product | null>(null);
   const [tempNotes, setTempNotes] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [orderSuccess, setOrderSuccess] = useState(false);
 
-  const categories: string[] = ['TODOS', ...Array.from<string>(new Set(products.map(p => (p.category || 'Geral'))))];
-  const allCategories: string[] = Array.from<string>(new Set(products.map(p => (p.category || 'Geral'))));
+  // Available waiter names from localStorage
+  const waitersList: string[] = (() => {
+    try {
+      const saved = localStorage.getItem('waitersList');
+      return saved ? JSON.parse(saved) : ['Rancheiros', 'Carlos', 'Ana', 'Pedro'];
+    } catch {
+      return ['Rancheiros', 'Carlos', 'Ana', 'Pedro'];
+    }
+  })();
 
   const toggleCategoryCollapse = (catName: string) => {
     setCollapsedCategories(prev => ({
       ...prev,
-      [catName]: !prev[catName]
+      [catName]: !(prev[catName] ?? true)
     }));
   };
 
@@ -58,11 +75,10 @@ export const MobileOrderView: React.FC<MobileOrderViewProps> = ({
 
   const categoryGroups = allCategories.map(cat => {
     const items = products.filter(p => {
-      const matchesCategoryFilter = selectedCategory === 'TODOS' || p.category === cat;
       const matchesSearch = searchQuery.trim() === '' ||
                             p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                             (p.description && p.description.toLowerCase().includes(searchQuery.toLowerCase()));
-      return matchesCategoryFilter && matchesSearch && p.available && (p.category || 'Geral') === cat;
+      return matchesSearch && p.available && (p.category?.trim() || 'Geral') === cat;
     });
 
     return { category: cat, items };
@@ -111,7 +127,6 @@ export const MobileOrderView: React.FC<MobileOrderViewProps> = ({
   };
 
   const cartTotal = cart.reduce((sum, item) => sum + (item.product.price * item.quantity), 0);
-  const cartItemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
 
   const handleSendOrder = async (autoPrint = false) => {
     if (!selectedTableId) {
@@ -129,7 +144,8 @@ export const MobileOrderView: React.FC<MobileOrderViewProps> = ({
     try {
       await onSubmitOrder({
         tableId: selectedTableId,
-        waiterName,
+        waiterName: waiterName || 'Rancheiros',
+        customerName: customerName.trim() || undefined,
         items: cart.map(item => ({
           productId: item.product.id,
           name: item.product.name,
@@ -174,81 +190,77 @@ export const MobileOrderView: React.FC<MobileOrderViewProps> = ({
         </span>
       </div>
 
-      {/* Table & Waiter Selection */}
-      <div className="bg-slate-900 p-3 border-b border-slate-800/80 grid grid-cols-2 gap-2">
-        <div>
-          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Mesa / Local</label>
-          <select
-            value={selectedTableId}
-            onChange={e => setSelectedTableId(e.target.value)}
-            className="w-full bg-slate-950 text-white text-xs font-bold p-2 rounded-xl border border-slate-700 focus:border-amber-400 outline-none"
-          >
-            {tables.map(t => (
-              <option key={t.id} value={t.id}>
-                {t.name} ({t.status === 'FREE' ? 'Livre' : 'Ocupada'})
-              </option>
-            ))}
-          </select>
+      {/* Table, Waiter & Customer Selection */}
+      <div className="bg-slate-900 p-3 border-b border-slate-800/80 space-y-2">
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Mesa / Local</label>
+            <select
+              value={selectedTableId}
+              onChange={e => setSelectedTableId(e.target.value)}
+              className="w-full bg-slate-950 text-white text-xs font-bold p-2 rounded-xl border border-slate-700 focus:border-amber-400 outline-none"
+            >
+              {tables.map(t => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({t.status === 'FREE' ? 'Livre' : 'Ocupada'})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Garçom</label>
+            <select
+              value={waiterName}
+              onChange={e => setWaiterName(e.target.value)}
+              className="w-full bg-slate-950 text-white text-xs font-bold p-2 rounded-xl border border-slate-700 focus:border-amber-400 outline-none"
+            >
+              {waitersList.map(w => (
+                <option key={w} value={w}>{w}</option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div>
-          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Garçom</label>
+          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Nome do Cliente (Opcional)</label>
           <input
             type="text"
-            value={waiterName}
-            onChange={e => setWaiterName(e.target.value)}
-            placeholder="Seu Nome"
-            className="w-full bg-slate-950 text-white text-xs font-bold p-2 rounded-xl border border-slate-700 focus:border-amber-400 outline-none"
+            value={customerName}
+            onChange={e => setCustomerName(e.target.value)}
+            placeholder="Ex: João Silva, Mesa da Varanda..."
+            className="w-full bg-slate-950 text-white text-xs p-2 rounded-xl border border-slate-700 focus:border-amber-400 outline-none"
           />
         </div>
       </div>
 
-      {/* Category Horizontal Filter Chips & Accordion Controls */}
-      <div className="bg-slate-950/80 p-2 overflow-x-auto flex items-center justify-between no-scrollbar border-b border-slate-800">
-        <div className="flex space-x-1.5 overflow-x-auto no-scrollbar py-0.5">
-          {categories.map(cat => (
-            <button
-              key={cat}
-              onClick={() => setSelectedCategory(cat)}
-              className={`px-3 py-1 rounded-xl text-[11px] font-bold whitespace-nowrap transition ${
-                selectedCategory === cat
-                  ? 'bg-amber-500 text-slate-950 shadow-sm'
-                  : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700'
-              }`}
-            >
-              {cat}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex items-center space-x-1 pl-2 border-l border-slate-800 text-[10px] whitespace-nowrap">
-          <button
-            onClick={expandAll}
-            className="text-slate-400 hover:text-amber-400 font-semibold px-1.5 py-1"
-          >
-            Expandir
-          </button>
-          <span className="text-slate-700">|</span>
-          <button
-            onClick={collapseAll}
-            className="text-slate-400 hover:text-amber-400 font-semibold px-1.5 py-1"
-          >
-            Recolher
-          </button>
-        </div>
-      </div>
-
-      {/* Search Input */}
-      <div className="p-3 bg-slate-900 border-b border-slate-800/60">
-        <div className="relative">
+      {/* Search Input & Accordion Controls */}
+      <div className="p-3 bg-slate-950 border-b border-slate-800/60 flex items-center justify-between gap-2">
+        <div className="relative flex-1">
           <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
           <input
             type="text"
             placeholder="Buscar item no cardápio..."
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            className="w-full bg-slate-950 text-slate-200 text-xs pl-9 pr-3 py-2 rounded-xl border border-slate-800 focus:border-amber-400 outline-none"
+            className="w-full bg-slate-900 text-slate-200 text-xs pl-9 pr-3 py-2 rounded-xl border border-slate-800 focus:border-amber-400 outline-none"
           />
+        </div>
+
+        <div className="flex items-center space-x-1 text-[10px] whitespace-nowrap bg-slate-900 p-1.5 rounded-xl border border-slate-800">
+          <button
+            onClick={expandAll}
+            className="text-slate-400 hover:text-amber-400 font-semibold px-1"
+          >
+            Expandir
+          </button>
+          <span className="text-slate-700">|</span>
+          <button
+            onClick={collapseAll}
+            className="text-slate-400 hover:text-amber-400 font-semibold px-1"
+          >
+            Recolher
+          </button>
         </div>
       </div>
 
@@ -256,11 +268,11 @@ export const MobileOrderView: React.FC<MobileOrderViewProps> = ({
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
         {categoryGroups.length === 0 ? (
           <div className="text-center py-10 text-slate-500 text-xs font-medium">
-            Nenhum produto encontrado nesta categoria.
+            Nenhum produto encontrado.
           </div>
         ) : (
           categoryGroups.map(({ category, items }) => {
-            const isCollapsed = searchQuery.trim() === '' && (collapsedCategories[category] ?? false);
+            const isCollapsed = searchQuery.trim() === '' && (collapsedCategories[category] ?? true);
             const totalCartInCategory = items.reduce((sum, item) => {
               const cartEntries = cart.filter(c => c.product.id === item.id);
               return sum + cartEntries.reduce((s, c) => s + c.quantity, 0);

@@ -38,7 +38,10 @@ export default function App() {
   // Compute enriched tables with activeOrders and currentTotal derived from orders
   const tables = useMemo(() => {
     return rawTables.map(t => {
-      const activeOrders = (orders || []).filter(o => o.tableId === t.id && o.status !== 'CLOSED');
+      const activeOrders = (orders || []).filter(o => 
+        (o.tableId === t.id || o.tableName?.toLowerCase() === t.name?.toLowerCase() || String(o.tableId) === String(t.number)) && 
+        o.status !== 'CLOSED'
+      );
       const currentTotal = activeOrders.reduce((sum, ord) => {
         const itemsSum = (ord.items || []).reduce((iSum, item) => iSum + ((Number(item.price) || 0) * (Number(item.quantity) || 0)), 0);
         return sum + itemsSum;
@@ -48,6 +51,7 @@ export default function App() {
 
       return {
         ...t,
+        status: activeOrders.length > 0 ? ('OCCUPIED' as const) : t.status,
         activeOrders,
         currentTotal,
         openedAt: oldestOrder?.createdAt || t.openedAt,
@@ -110,7 +114,16 @@ export default function App() {
 
       setProducts(loadedProducts.length ? loadedProducts : INITIAL_PRODUCTS);
       setRawTables(loadedTables.length ? loadedTables : INITIAL_TABLES);
-      setOrders(loadedOrders);
+      setOrders(prev => {
+        const mergedMap = new Map<string, Order>();
+        loadedOrders.forEach(o => mergedMap.set(o.id, o));
+        prev.forEach(o => {
+          if (o.status === 'OPEN' && !mergedMap.has(o.id)) {
+            mergedMap.set(o.id, o);
+          }
+        });
+        return Array.from(mergedMap.values());
+      });
       setPrintJobs(loadedPrintJobs);
     } catch (err) {
       console.error('API Sync error, using direct Firestore:', err);
@@ -122,7 +135,16 @@ export default function App() {
       ]);
       setProducts(p.length ? p : INITIAL_PRODUCTS);
       setRawTables(t.length ? t : INITIAL_TABLES);
-      setOrders(o);
+      setOrders(prev => {
+        const mergedMap = new Map<string, Order>();
+        o.forEach(ord => mergedMap.set(ord.id, ord));
+        prev.forEach(ord => {
+          if (ord.status === 'OPEN' && !mergedMap.has(ord.id)) {
+            mergedMap.set(ord.id, ord);
+          }
+        });
+        return Array.from(mergedMap.values());
+      });
       setPrintJobs(pj);
     } finally {
       setIsSyncing(false);
@@ -143,56 +165,47 @@ export default function App() {
     orderData: {
       tableId: string;
       waiterName: string;
+      customerName?: string;
       items: { productId: string; name: string; price: number; quantity: number; notes: string; destination: any }[];
       customerCount?: number;
     },
     autoPrint = false
   ) => {
-    let newOrder: Order | null = null;
+    const targetTable = rawTables.find(t => t.id === orderData.tableId);
+    const orderNum = Math.max(...orders.map(o => o.orderNumber || 0), 100) + 1;
+    const orderItems = orderData.items.map((it, idx) => ({
+      id: `item-${Date.now()}-${idx}`,
+      productId: it.productId,
+      name: it.name,
+      price: it.price,
+      quantity: it.quantity,
+      notes: it.notes || '',
+      status: 'PENDING' as OrderItemStatus,
+      destination: it.destination || ('KITCHEN' as const)
+    }));
+    const calculatedTotal = orderItems.reduce((s, item) => s + item.price * item.quantity, 0);
+
+    const newOrder: Order = {
+      id: `order-${Date.now()}`,
+      orderNumber: orderNum,
+      tableId: orderData.tableId,
+      tableName: targetTable ? targetTable.name : `Mesa ${orderData.tableId}`,
+      waiterName: orderData.waiterName || 'Rancheiros',
+      customerName: orderData.customerName,
+      status: 'OPEN',
+      createdAt: new Date().toISOString(),
+      printedToKitchen: false,
+      total: calculatedTotal,
+      items: orderItems
+    };
+
+    // Instant state update so table never appears empty
+    setOrders(prev => [...prev.filter(o => o.id !== newOrder.id), newOrder]);
+    setRawTables(prev => prev.map(t => t.id === orderData.tableId ? { ...t, status: 'OCCUPIED' } : t));
+
+    // Save order to Firestore
     try {
-      const res = await fetch('/api/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(orderData)
-      });
-      if (res.ok) {
-        newOrder = await res.json();
-      }
-    } catch (err) {
-      // API call failed, handle via direct Firestore
-    }
-
-    if (!newOrder) {
-      // Fallback to direct Firestore order creation
-      const targetTable = tables.find(t => t.id === orderData.tableId);
-      const orderNum = Math.max(...orders.map(o => o.orderNumber || 0), 100) + 1;
-      const orderItems = orderData.items.map((it, idx) => ({
-        id: `item-${Date.now()}-${idx}`,
-        productId: it.productId,
-        name: it.name,
-        price: it.price,
-        quantity: it.quantity,
-        notes: it.notes || '',
-        status: 'PENDING' as OrderItemStatus,
-        destination: it.destination || ('KITCHEN' as const)
-      }));
-      const calculatedTotal = orderItems.reduce((s, item) => s + item.price * item.quantity, 0);
-
-      newOrder = {
-        id: `order-${Date.now()}`,
-        orderNumber: orderNum,
-        tableId: orderData.tableId,
-        tableName: targetTable ? targetTable.name : `Mesa ${orderData.tableId}`,
-        waiterName: orderData.waiterName || 'Garçom',
-        status: 'OPEN',
-        createdAt: new Date().toISOString(),
-        printedToKitchen: false,
-        total: calculatedTotal,
-        items: orderItems
-      };
       await saveFirestoreOrder(newOrder);
-
-      // Set table to OCCUPIED
       if (targetTable) {
         await saveFirestoreTable({
           id: targetTable.id,
@@ -203,27 +216,11 @@ export default function App() {
           status: 'OCCUPIED'
         });
       }
-
-      // Create print job if autoPrint
-      if (autoPrint) {
-        const pJob: PrintJob = {
-          id: `pj-${Date.now()}`,
-          orderId: newOrder.id,
-          orderNumber: newOrder.orderNumber,
-          tableName: newOrder.tableName,
-          waiterName: newOrder.waiterName,
-          destination: 'KITCHEN',
-          items: newOrder.items.map((i: any) => ({ name: i.name, quantity: i.quantity, price: i.price, notes: i.notes })),
-          createdAt: newOrder.createdAt,
-          status: 'PENDING'
-        };
-        await saveFirestorePrintJob(pJob);
-      }
+    } catch (err) {
+      console.error('Error saving order to Firestore:', err);
     }
 
-    await fetchAllData();
-
-    if (autoPrint && newOrder) {
+    if (autoPrint) {
       const pJob: PrintJob = {
         id: `pj-${Date.now()}`,
         orderId: newOrder.id,
@@ -235,6 +232,8 @@ export default function App() {
         createdAt: newOrder.createdAt,
         status: 'PENDING'
       };
+      setPrintJobs(prev => [...prev, pJob]);
+      saveFirestorePrintJob(pJob).catch(() => {});
       setActivePrintJobForThermal(pJob);
       setTimeout(() => {
         window.print();
@@ -246,10 +245,13 @@ export default function App() {
 
   // Handler: Delete Item from active Order
   const handleDeleteItemFromOrder = async (orderId: string, itemId: string) => {
+    setOrders(prev => prev.map(o => {
+      if (o.id !== orderId) return o;
+      const updatedItems = o.items.filter(i => i.id !== itemId);
+      return { ...o, items: updatedItems };
+    }).filter(o => o.items.length > 0));
+
     try {
-      const res = await fetch(`/api/orders/${orderId}/items/${itemId}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('API failed');
-    } catch {
       const order = orders.find(o => o.id === orderId);
       if (order) {
         const updatedItems = order.items.filter(i => i.id !== itemId);
@@ -259,8 +261,9 @@ export default function App() {
           await saveFirestoreOrder({ ...order, items: updatedItems });
         }
       }
+    } catch (err) {
+      console.error('Error deleting order item:', err);
     }
-    await fetchAllData();
   };
 
   // Handler: Change Order or Item Status in Kitchen View
@@ -270,14 +273,17 @@ export default function App() {
     itemId?: string,
     itemStatus?: OrderItemStatus
   ) => {
+    setOrders(prev => prev.map(o => {
+      if (o.id !== orderId) return o;
+      let updated = { ...o };
+      if (status) updated.status = status as any;
+      if (itemId && itemStatus) {
+        updated.items = updated.items.map(i => i.id === itemId ? { ...i, status: itemStatus } : i);
+      }
+      return updated;
+    }));
+
     try {
-      const res = await fetch(`/api/orders/${orderId}/status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, itemId, itemStatus })
-      });
-      if (!res.ok) throw new Error('API failed');
-    } catch {
       const order = orders.find(o => o.id === orderId);
       if (order) {
         let updated = { ...order };
@@ -287,8 +293,9 @@ export default function App() {
         }
         await saveFirestoreOrder(updated);
       }
+    } catch (err) {
+      console.error('Error updating order status in Firestore:', err);
     }
-    fetchAllData();
   };
 
   // Handler: Complete Checkout for Table
@@ -357,66 +364,50 @@ export default function App() {
       ...prodData,
       id: `prod-${Date.now()}`
     };
+    setProducts(prev => [...prev.filter(p => p.id !== newP.id), newP]);
     try {
-      const res = await fetch('/api/products', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(prodData)
-      });
-      if (!res.ok) throw new Error('API failed');
-    } catch {
       await saveFirestoreProduct(newP);
+    } catch (err) {
+      console.error('Error saving product to Firestore:', err);
     }
-    fetchAllData();
   };
 
   const handleUpdateProduct = async (id: string, updates: Partial<Product>) => {
-    try {
-      const res = await fetch(`/api/products/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates)
-      });
-      if (!res.ok) throw new Error('API failed');
-    } catch {
-      const p = products.find(prod => prod.id === id);
-      if (p) {
+    setProducts(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
+    const p = products.find(prod => prod.id === id);
+    if (p) {
+      try {
         await saveFirestoreProduct({ ...p, ...updates });
+      } catch (err) {
+        console.error('Error updating product in Firestore:', err);
       }
     }
-    fetchAllData();
   };
 
   const handleDeleteProduct = async (id: string) => {
+    setProducts(prev => prev.filter(p => p.id !== id));
     try {
-      const res = await fetch(`/api/products/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('API failed');
-    } catch {
       await deleteFirestoreProduct(id);
+    } catch (err) {
+      console.error('Error deleting product in Firestore:', err);
     }
-    fetchAllData();
   };
 
   // Handler: Add Table
   const handleAddTable = async (name: string, capacity: number) => {
     const newT: Table = {
       id: `table-${Date.now()}`,
-      number: tables.length + 1,
+      number: rawTables.length + 1,
       name,
       capacity,
       status: 'FREE'
     };
+    setRawTables(prev => [...prev.filter(t => t.id !== newT.id), newT]);
     try {
-      const res = await fetch('/api/tables', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, capacity })
-      });
-      if (!res.ok) throw new Error('API failed');
-    } catch {
       await saveFirestoreTable(newT);
+    } catch (err) {
+      console.error('Error saving table in Firestore:', err);
     }
-    fetchAllData();
   };
 
   // Handler: Update Table Status

@@ -130,7 +130,7 @@ export const TablesView: React.FC<TablesViewProps> = ({
                   {getStatusBadge(table.status)}
                 </div>
 
-                <div className="flex items-center space-x-3 text-xs text-slate-500 mb-3">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 mb-3">
                   <span className="flex items-center space-x-1">
                     <Users className="w-3.5 h-3.5 text-slate-400" />
                     <span>Cap: {table.capacity} p.</span>
@@ -138,6 +138,11 @@ export const TablesView: React.FC<TablesViewProps> = ({
                   {table.waiter && (
                     <span className="truncate">
                       Garçom: <strong className="text-slate-700">{table.waiter}</strong>
+                    </span>
+                  )}
+                  {activeOrders.find(o => o.customerName)?.customerName && (
+                    <span className="truncate text-amber-700 font-bold bg-amber-100/80 px-2 py-0.5 rounded-md border border-amber-200">
+                      Cliente: {activeOrders.find(o => o.customerName)?.customerName}
                     </span>
                   )}
                   {elapsedTime && (
