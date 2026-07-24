@@ -112,8 +112,26 @@ export default function App() {
       if (!loadedOrders.length) loadedOrders = await getFirestoreOrders();
       if (!loadedPrintJobs.length) loadedPrintJobs = await getFirestorePrintJobs();
 
-      setProducts(loadedProducts.length ? loadedProducts : INITIAL_PRODUCTS);
-      setRawTables(loadedTables.length ? loadedTables : INITIAL_TABLES);
+      setProducts(prev => {
+        const base = loadedProducts.length ? loadedProducts : INITIAL_PRODUCTS;
+        const map = new Map<string, Product>();
+        base.forEach(p => map.set(p.id, p));
+        prev.forEach(p => {
+          if (!map.has(p.id)) map.set(p.id, p);
+        });
+        return Array.from(map.values());
+      });
+
+      setRawTables(prev => {
+        const base = loadedTables.length ? loadedTables : INITIAL_TABLES;
+        const map = new Map<string, Table>();
+        base.forEach(t => map.set(t.id, t));
+        prev.forEach(t => {
+          if (!map.has(t.id)) map.set(t.id, t);
+        });
+        return Array.from(map.values()).sort((a, b) => a.number - b.number);
+      });
+
       setOrders(prev => {
         const mergedMap = new Map<string, Order>();
         loadedOrders.forEach(o => mergedMap.set(o.id, o));
@@ -133,8 +151,26 @@ export default function App() {
         getFirestoreOrders(),
         getFirestorePrintJobs()
       ]);
-      setProducts(p.length ? p : INITIAL_PRODUCTS);
-      setRawTables(t.length ? t : INITIAL_TABLES);
+
+      setProducts(prev => {
+        const base = p.length ? p : INITIAL_PRODUCTS;
+        const map = new Map<string, Product>();
+        base.forEach(item => map.set(item.id, item));
+        prev.forEach(item => {
+          if (!map.has(item.id)) map.set(item.id, item);
+        });
+        return Array.from(map.values());
+      });
+
+      setRawTables(prev => {
+        const base = t.length ? t : INITIAL_TABLES;
+        const map = new Map<string, Table>();
+        base.forEach(tbl => map.set(tbl.id, tbl));
+        prev.forEach(tbl => {
+          if (!map.has(tbl.id)) map.set(tbl.id, tbl);
+        });
+        return Array.from(map.values()).sort((a, b) => a.number - b.number);
+      });
       setOrders(prev => {
         const mergedMap = new Map<string, Order>();
         o.forEach(ord => mergedMap.set(ord.id, ord));
