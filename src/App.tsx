@@ -9,6 +9,7 @@ import { ProductsManager } from './components/ProductsManager';
 import { PrinterSimulator } from './components/PrinterSimulator';
 import { ThermalReceipt } from './components/ThermalReceipt';
 import { Product, Table, Order, PrintJob, TableStatus, OrderItemStatus, PaymentMethod, PaymentRecord } from './types';
+import { INITIAL_PRODUCTS, INITIAL_TABLES } from './data/initialData';
 import {
   getFirestoreProducts,
   getFirestoreTables,
@@ -28,8 +29,10 @@ import {
 export default function App() {
   const [currentMode, setCurrentMode] = useState<AppMode>('TABLES');
   const [isStandaloneMobile, setIsStandaloneMobile] = useState<boolean>(false);
-  const [products, setProducts] = useState<Product[]>([]);
-  const [tables, setTables] = useState<(Table & { activeOrders: Order[]; currentTotal: number })[]>([]);
+  const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
+  const [tables, setTables] = useState<(Table & { activeOrders: Order[]; currentTotal: number })[]>(
+    INITIAL_TABLES.map(t => ({ ...t, activeOrders: [], currentTotal: 0 }))
+  );
   const [orders, setOrders] = useState<Order[]>([]);
   const [printJobs, setPrintJobs] = useState<PrintJob[]>([]);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
@@ -53,6 +56,8 @@ export default function App() {
   const fetchAllData = useCallback(async () => {
     setIsSyncing(true);
     try {
+      const isJson = (res: Response) => res.ok && res.headers.get('content-type')?.includes('application/json');
+
       const [prodRes, tableRes, orderRes, printRes] = await Promise.allSettled([
         fetch('/api/products'),
         fetch('/api/tables'),
@@ -65,27 +70,27 @@ export default function App() {
       let loadedOrders: Order[] = [];
       let loadedPrintJobs: PrintJob[] = [];
 
-      if (prodRes.status === 'fulfilled' && prodRes.value.ok) {
+      if (prodRes.status === 'fulfilled' && isJson(prodRes.value)) {
         try { loadedProducts = await prodRes.value.json(); } catch {}
       }
-      if (tableRes.status === 'fulfilled' && tableRes.value.ok) {
+      if (tableRes.status === 'fulfilled' && isJson(tableRes.value)) {
         try { loadedTables = await tableRes.value.json(); } catch {}
       }
-      if (orderRes.status === 'fulfilled' && orderRes.value.ok) {
+      if (orderRes.status === 'fulfilled' && isJson(orderRes.value)) {
         try { loadedOrders = await orderRes.value.json(); } catch {}
       }
-      if (printRes.status === 'fulfilled' && printRes.value.ok) {
+      if (printRes.status === 'fulfilled' && isJson(printRes.value)) {
         try { loadedPrintJobs = await printRes.value.json(); } catch {}
       }
 
       // Fallback to Firestore directly if backend API is not present (e.g. static host on Vercel)
       if (!loadedProducts.length) loadedProducts = await getFirestoreProducts();
       if (!loadedTables.length) loadedTables = await getFirestoreTables();
-      if (!loadedOrders.length && (orderRes.status === 'rejected' || !orderRes.value?.ok)) loadedOrders = await getFirestoreOrders();
-      if (!loadedPrintJobs.length && (printRes.status === 'rejected' || !printRes.value?.ok)) loadedPrintJobs = await getFirestorePrintJobs();
+      if (!loadedOrders.length) loadedOrders = await getFirestoreOrders();
+      if (!loadedPrintJobs.length) loadedPrintJobs = await getFirestorePrintJobs();
 
-      setProducts(loadedProducts);
-      setTables(loadedTables as any);
+      setProducts(loadedProducts.length ? loadedProducts : INITIAL_PRODUCTS);
+      setTables((loadedTables.length ? loadedTables : INITIAL_TABLES) as any);
       setOrders(loadedOrders);
       setPrintJobs(loadedPrintJobs);
     } catch (err) {
@@ -96,8 +101,8 @@ export default function App() {
         getFirestoreOrders(),
         getFirestorePrintJobs()
       ]);
-      setProducts(p);
-      setTables(t as any);
+      setProducts(p.length ? p : INITIAL_PRODUCTS);
+      setTables((t.length ? t : INITIAL_TABLES) as any);
       setOrders(o);
       setPrintJobs(pj);
     } finally {

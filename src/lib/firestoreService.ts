@@ -23,13 +23,14 @@ export async function getFirestoreProducts(): Promise<Product[]> {
   try {
     const snapshot = await getDocs(collection(db, PRODUCTS_COL));
     if (snapshot.empty) {
-      // Seed initial products
-      for (const p of INITIAL_PRODUCTS) {
-        await setDoc(doc(db, PRODUCTS_COL, p.id), p);
-      }
+      // Seed initial products in background without blocking return
+      Promise.all(INITIAL_PRODUCTS.map(p => setDoc(doc(db, PRODUCTS_COL, p.id), p))).catch(err => {
+        console.warn('Background product seeding warning:', err);
+      });
       return [...INITIAL_PRODUCTS];
     }
-    return snapshot.docs.map(d => d.data() as Product);
+    const list = snapshot.docs.map(d => d.data() as Product);
+    return list.length > 0 ? list : [...INITIAL_PRODUCTS];
   } catch (err) {
     console.error('Error reading products from Firestore:', err);
     return [...INITIAL_PRODUCTS];
@@ -58,14 +59,15 @@ export async function getFirestoreTables(): Promise<Table[]> {
   try {
     const snapshot = await getDocs(collection(db, TABLES_COL));
     if (snapshot.empty) {
-      // Seed initial tables
-      for (const t of INITIAL_TABLES) {
-        await setDoc(doc(db, TABLES_COL, t.id), t);
-      }
+      // Seed initial tables in background
+      Promise.all(INITIAL_TABLES.map(t => setDoc(doc(db, TABLES_COL, t.id), t))).catch(err => {
+        console.warn('Background table seeding warning:', err);
+      });
       return [...INITIAL_TABLES];
     }
     const tables = snapshot.docs.map(d => d.data() as Table);
-    return tables.sort((a, b) => a.number - b.number);
+    const sorted = tables.sort((a, b) => a.number - b.number);
+    return sorted.length > 0 ? sorted : [...INITIAL_TABLES];
   } catch (err) {
     console.error('Error reading tables from Firestore:', err);
     return [...INITIAL_TABLES];
