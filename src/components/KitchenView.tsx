@@ -167,6 +167,11 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                         </span>
                       </div>
                       <span className="text-[11px] text-slate-400">Garçom: {order.waiterName}</span>
+                      {order.customerName && (
+                        <span className="text-xs font-bold text-amber-400 block mt-0.5 uppercase">
+                          Cliente: {order.customerName}
+                        </span>
+                      )}
                     </div>
 
                     <div className="text-right">
@@ -243,6 +248,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                         orderNumber: order.orderNumber,
                         tableName: order.tableName,
                         waiterName: order.waiterName,
+                        customerName: order.customerName,
                         destination: 'KITCHEN',
                         items: filteredItems.map(i => ({ name: i.name, quantity: i.quantity, notes: i.notes })),
                         createdAt: order.createdAt,

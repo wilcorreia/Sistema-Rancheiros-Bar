@@ -21,6 +21,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 }) => {
   const subtotal = table.currentTotal || 0;
   const activeOrders = table.activeOrders || [];
+  const customerName = activeOrders.find(o => o.customerName)?.customerName;
   const [includeServiceFee, setIncludeServiceFee] = useState<boolean>(() => localStorage.getItem('defaultServiceFeeEnabled') === 'true');
   const [discountAmount, setDiscountAmount] = useState(0);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('PIX');
@@ -57,6 +58,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       setCompletedReceipt({
         tableName: table.name,
         waiterName: table.waiter || 'Atendente',
+        customerName: customerName,
         subtotal,
         serviceFee,
         discountAmount,
@@ -82,6 +84,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const printData = completedReceipt || {
     tableName: table.name,
     waiterName: table.waiter || 'Atendente',
+    customerName: customerName,
     subtotal,
     serviceFee,
     discountAmount,
@@ -104,7 +107,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                 </div>
                 <div>
                   <h3 className="font-extrabold text-lg text-slate-900">Fechamento de Conta - {table.name}</h3>
-                  <p className="text-xs text-slate-500">Garçom: {table.waiter || 'Não informado'}</p>
+                  <p className="text-xs text-slate-500">
+                    Garçom: {table.waiter || 'Não informado'}
+                    {customerName && <span className="ml-2 font-extrabold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 uppercase">Cliente: {customerName}</span>}
+                  </p>
                 </div>
               </div>
               <button onClick={onClose} className="text-slate-400 hover:text-slate-600 font-bold p-1">
@@ -319,6 +325,12 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             <span className="uppercase">{printData.tableName}</span>
             <span>Garçom: {printData.waiterName}</span>
           </div>
+
+          {printData.customerName && (
+            <div className="text-center text-[12px] font-black uppercase my-0.5 py-0.5 border-b border-black text-black">
+              Cliente: {printData.customerName}
+            </div>
+          )}
 
           {/* Table Header */}
           <div className="flex justify-between font-bold text-[11px] border-b border-dashed border-black pb-0.5 mb-1 text-black">

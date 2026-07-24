@@ -8,10 +8,18 @@ interface ReportsViewProps {
   onRefreshData?: () => void;
 }
 
+function parseISOKey(ts?: string): string {
+  if (!ts) return new Date().toISOString().split('T')[0];
+  if (ts.includes('T')) return ts.split('T')[0];
+  const d = new Date(ts);
+  if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
+  return ts;
+}
+
 function calculateSummaryFromRecords(records: PaymentRecord[]) {
   const todayStr = new Date().toISOString().split('T')[0];
 
-  const todayRecords = records.filter(p => (p.timestamp || '').startsWith(todayStr));
+  const todayRecords = records.filter(p => parseISOKey(p.timestamp) === todayStr);
   const todayTotal = todayRecords.reduce((sum, p) => sum + (Number(p.total) || 0), 0);
 
   const byPaymentToday = {
@@ -31,7 +39,7 @@ function calculateSummaryFromRecords(records: PaymentRecord[]) {
 
   let monthlyTotal = 0;
   records.forEach(p => {
-    const dateKey = (p.timestamp || '').split('T')[0];
+    const dateKey = parseISOKey(p.timestamp);
     monthlyTotal += (Number(p.total) || 0);
     if (last30DaysMap.has(dateKey)) {
       const entry = last30DaysMap.get(dateKey)!;
@@ -80,26 +88,39 @@ export const ReportsView: React.FC<ReportsViewProps> = () => {
   const fetchReports = async () => {
     setIsLoading(true);
     try {
-      const firestoreRecords = await getFirestorePaymentRecords();
-      if (firestoreRecords && firestoreRecords.length > 0) {
-        setReportData(calculateSummaryFromRecords(firestoreRecords));
-      } else {
+      const recordsMap = new Map<string, PaymentRecord>();
+
+      // 1. Fetch direct from Firestore
+      try {
+        const firestoreRecords = await getFirestorePaymentRecords();
+        (firestoreRecords || []).forEach(r => recordsMap.set(r.id, r));
+      } catch (err) {
+        console.warn('Firestore payment records fetch warning:', err);
+      }
+
+      // 2. Fetch from Express API
+      try {
         const res = await fetch('/api/reports/summary');
         if (res.ok) {
           const data = await res.json();
-          setReportData(data);
-        } else {
-          setReportData(calculateSummaryFromRecords([]));
+          if (data && Array.isArray(data.recentTransactions)) {
+            data.recentTransactions.forEach((r: PaymentRecord) => {
+              if (!recordsMap.has(r.id)) recordsMap.set(r.id, r);
+            });
+          }
         }
+      } catch (err) {
+        console.warn('Express API reports fetch warning:', err);
       }
+
+      const combinedRecords = Array.from(recordsMap.values()).sort((a, b) => 
+        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+      );
+
+      setReportData(calculateSummaryFromRecords(combinedRecords));
     } catch (err) {
       console.error('Error fetching reports:', err);
-      try {
-        const firestoreRecords = await getFirestorePaymentRecords();
-        setReportData(calculateSummaryFromRecords(firestoreRecords || []));
-      } catch {
-        setReportData(calculateSummaryFromRecords([]));
-      }
+      setReportData(calculateSummaryFromRecords([]));
     } finally {
       setIsLoading(false);
     }
@@ -269,7 +290,12 @@ export const ReportsView: React.FC<ReportsViewProps> = () => {
                 <div>
                   <div className="font-bold text-slate-900 flex items-center space-x-2">
                     <span>{tx.tableName}</span>
-                    <span className="text-[10px] bg-slate-200 text-slate-700 px-1.5 rounded font-mono">{tx.paymentMethod}</span>
+                    <span className="text-[10px] bg-slate-200 text-slate-700 px-1.5 rounded font-mono font-bold">{tx.paymentMethod}</span>
+                    {tx.customerName && (
+                      <span className="text-[10px] bg-amber-100 text-amber-900 font-extrabold px-1.5 py-0.5 rounded border border-amber-200 uppercase">
+                        Cliente: {tx.customerName}
+                      </span>
+                    )}
                   </div>
                   <span className="text-[10px] text-slate-500">
                     Garçom: {tx.waiterName} • {new Date(tx.timestamp).toLocaleString('pt-BR')}

@@ -270,6 +270,7 @@ export default function App() {
         orderNumber: newOrder.orderNumber,
         tableName: newOrder.tableName,
         waiterName: newOrder.waiterName,
+        customerName: newOrder.customerName,
         destination: 'KITCHEN',
         items: newOrder.items.map((i: any) => ({ name: i.name, quantity: i.quantity, price: i.price, notes: i.notes })),
         createdAt: newOrder.createdAt,
@@ -384,12 +385,15 @@ export default function App() {
       });
     });
 
+    const customerName = tableOrders.find(o => o.customerName)?.customerName;
+
     const record: PaymentRecord = {
       id: `pay-${Date.now()}`,
       orderId: tableOrders.map(o => o.id).join(','),
       tableId: targetTable ? targetTable.id : checkoutData.tableId,
       tableName: targetTable ? targetTable.name : `Mesa ${checkoutData.tableId}`,
       waiterName: checkoutData.waiterName || targetTable?.waiter || 'Garçom',
+      customerName: customerName,
       subtotal: Math.round(subtotal * 100) / 100,
       serviceFee: checkoutData.serviceFee,
       discount: checkoutData.discount,
@@ -439,7 +443,12 @@ export default function App() {
       await fetch('/api/orders/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(checkoutData)
+        body: JSON.stringify({
+          ...checkoutData,
+          customerName,
+          itemsSummary: Array.from(itemsSummaryMap.values()),
+          totalAmount: Math.round(totalAmount * 100) / 100
+        })
       });
     } catch {
       // ignore network failure

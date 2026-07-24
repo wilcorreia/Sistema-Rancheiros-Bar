@@ -336,7 +336,7 @@ app.patch('/api/orders/:id/status', async (req, res) => {
 
 // Checkout / Close Table
 app.post('/api/orders/checkout', async (req, res) => {
-  const { tableId, paymentMethod, serviceFee, discount, waiterName } = req.body;
+  const { tableId, paymentMethod, serviceFee, discount, waiterName, customerName, itemsSummary, totalAmount } = req.body;
   const table = tables.find(t =>
     t.id === tableId ||
     String(t.number) === String(tableId) ||
@@ -354,15 +354,6 @@ app.post('/api/orders/checkout', async (req, res) => {
     )
   );
 
-  if (activeOrders.length === 0) {
-    return res.status(400).json({ error: 'Nenhum pedido aberto para esta mesa' });
-  }
-
-  const subtotal = activeOrders.reduce((sum, o) => sum + (o.total || 0), 0);
-  const feeVal = Number(serviceFee) || 0;
-  const discVal = Number(discount) || 0;
-  const total = Math.max(0, subtotal + feeVal - discVal);
-
   const itemsSummaryMap = new Map<string, { name: string; quantity: number; price: number }>();
   activeOrders.forEach(o => {
     (o.items || []).forEach(i => {
@@ -375,19 +366,36 @@ app.post('/api/orders/checkout', async (req, res) => {
     });
   });
 
+  let summaryItems = Array.from(itemsSummaryMap.values());
+  if (summaryItems.length === 0 && Array.isArray(itemsSummary) && itemsSummary.length > 0) {
+    summaryItems = itemsSummary;
+  }
+
+  let subtotal = activeOrders.reduce((sum, o) => sum + (o.total || 0), 0);
+  if (subtotal === 0 && summaryItems.length > 0) {
+    subtotal = summaryItems.reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
+  }
+
+  const feeVal = Number(serviceFee) || 0;
+  const discVal = Number(discount) || 0;
+  const calcTotal = totalAmount !== undefined ? Number(totalAmount) : Math.max(0, subtotal + feeVal - discVal);
+
+  const derivedCustomerName = customerName || activeOrders.find(o => o.customerName)?.customerName;
+
   const paymentRecord: PaymentRecord = {
     id: `pay-${Date.now()}`,
-    orderId: activeOrders.map(o => o.id).join(','),
+    orderId: activeOrders.map(o => o.id).join(',') || `pay-ord-${Date.now()}`,
     tableId: table ? table.id : tableId,
     tableName: table?.name || `Mesa ${tableId}`,
     waiterName: waiterName || table?.waiter || 'Garçom',
+    customerName: derivedCustomerName,
     subtotal: Math.round(subtotal * 100) / 100,
     serviceFee: Math.round(feeVal * 100) / 100,
     discount: Math.round(discVal * 100) / 100,
-    total: Math.round(total * 100) / 100,
+    total: Math.round(calcTotal * 100) / 100,
     paymentMethod: paymentMethod || 'PIX',
     timestamp: new Date().toISOString(),
-    itemsSummary: Array.from(itemsSummaryMap.values())
+    itemsSummary: summaryItems
   };
 
   paymentRecords.unshift(paymentRecord);

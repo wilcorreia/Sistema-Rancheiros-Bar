@@ -62,6 +62,7 @@ export interface PaymentRecord {
   tableId: string;
   tableName: string;
   waiterName: string;
+  customerName?: string;
   subtotal: number;
   serviceFee: number;
   discount: number;
@@ -77,6 +78,7 @@ export interface PrintJob {
   orderNumber: number;
   tableName: string;
   waiterName: string;
+  customerName?: string;
   destination: PrintDestination;
   items: { name: string; quantity: number; price?: number; notes?: string }[];
   createdAt: string;
