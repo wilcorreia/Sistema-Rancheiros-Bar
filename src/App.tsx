@@ -8,7 +8,22 @@ import { ReportsView } from './components/ReportsView';
 import { ProductsManager } from './components/ProductsManager';
 import { PrinterSimulator } from './components/PrinterSimulator';
 import { ThermalReceipt } from './components/ThermalReceipt';
-import { Product, Table, Order, PrintJob, TableStatus, OrderItemStatus, PaymentMethod } from './types';
+import { Product, Table, Order, PrintJob, TableStatus, OrderItemStatus, PaymentMethod, PaymentRecord } from './types';
+import {
+  getFirestoreProducts,
+  getFirestoreTables,
+  getFirestoreOrders,
+  getFirestorePrintJobs,
+  saveFirestoreProduct,
+  deleteFirestoreProduct,
+  saveFirestoreTable,
+  saveFirestoreOrder,
+  saveFirestorePaymentRecord,
+  saveFirestorePrintJob,
+  resetFirestoreData,
+  clearFirestoreSalesData,
+  deleteFirestoreOrder
+} from './lib/firestoreService';
 
 export default function App() {
   const [currentMode, setCurrentMode] = useState<AppMode>('TABLES');
@@ -34,23 +49,57 @@ export default function App() {
   const [activePrintJobForThermal, setActivePrintJobForThermal] = useState<PrintJob | null>(null);
   const [showPrinterModal, setShowPrinterModal] = useState<boolean>(false);
 
-  // Fetch all live state from Express API
+  // Fetch all live state from Express API (or fallback directly to client-side Firestore)
   const fetchAllData = useCallback(async () => {
     setIsSyncing(true);
     try {
-      const [prodRes, tableRes, orderRes, printRes] = await Promise.all([
+      const [prodRes, tableRes, orderRes, printRes] = await Promise.allSettled([
         fetch('/api/products'),
         fetch('/api/tables'),
         fetch('/api/orders'),
         fetch('/api/print-jobs')
       ]);
 
-      if (prodRes.ok) setProducts(await prodRes.json());
-      if (tableRes.ok) setTables(await tableRes.json());
-      if (orderRes.ok) setOrders(await orderRes.json());
-      if (printRes.ok) setPrintJobs(await printRes.json());
+      let loadedProducts: Product[] = [];
+      let loadedTables: Table[] = [];
+      let loadedOrders: Order[] = [];
+      let loadedPrintJobs: PrintJob[] = [];
+
+      if (prodRes.status === 'fulfilled' && prodRes.value.ok) {
+        try { loadedProducts = await prodRes.value.json(); } catch {}
+      }
+      if (tableRes.status === 'fulfilled' && tableRes.value.ok) {
+        try { loadedTables = await tableRes.value.json(); } catch {}
+      }
+      if (orderRes.status === 'fulfilled' && orderRes.value.ok) {
+        try { loadedOrders = await orderRes.value.json(); } catch {}
+      }
+      if (printRes.status === 'fulfilled' && printRes.value.ok) {
+        try { loadedPrintJobs = await printRes.value.json(); } catch {}
+      }
+
+      // Fallback to Firestore directly if backend API is not present (e.g. static host on Vercel)
+      if (!loadedProducts.length) loadedProducts = await getFirestoreProducts();
+      if (!loadedTables.length) loadedTables = await getFirestoreTables();
+      if (!loadedOrders.length && (orderRes.status === 'rejected' || !orderRes.value?.ok)) loadedOrders = await getFirestoreOrders();
+      if (!loadedPrintJobs.length && (printRes.status === 'rejected' || !printRes.value?.ok)) loadedPrintJobs = await getFirestorePrintJobs();
+
+      setProducts(loadedProducts);
+      setTables(loadedTables as any);
+      setOrders(loadedOrders);
+      setPrintJobs(loadedPrintJobs);
     } catch (err) {
-      console.error('Error syncing with backend server:', err);
+      console.error('API Sync error, using direct Firestore:', err);
+      const [p, t, o, pj] = await Promise.all([
+        getFirestoreProducts(),
+        getFirestoreTables(),
+        getFirestoreOrders(),
+        getFirestorePrintJobs()
+      ]);
+      setProducts(p);
+      setTables(t as any);
+      setOrders(o);
+      setPrintJobs(pj);
     } finally {
       setIsSyncing(false);
     }
@@ -75,18 +124,64 @@ export default function App() {
     },
     autoPrint = false
   ) => {
-    const res = await fetch('/api/orders', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(orderData)
-    });
+    let newOrder: Order | null = null;
+    try {
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(orderData)
+      });
+      if (res.ok) {
+        newOrder = await res.json();
+      }
+    } catch (err) {
+      // API call failed, handle via direct Firestore
+    }
 
-    if (res.ok) {
-      const newOrder = await res.json();
-      await fetchAllData();
+    if (!newOrder) {
+      // Fallback to direct Firestore order creation
+      const targetTable = tables.find(t => t.id === orderData.tableId);
+      const orderNum = Math.max(...orders.map(o => o.orderNumber || 0), 100) + 1;
+      const orderItems = orderData.items.map((it, idx) => ({
+        id: `item-${Date.now()}-${idx}`,
+        productId: it.productId,
+        name: it.name,
+        price: it.price,
+        quantity: it.quantity,
+        notes: it.notes || '',
+        status: 'PENDING' as OrderItemStatus,
+        destination: it.destination || ('KITCHEN' as const)
+      }));
+      const calculatedTotal = orderItems.reduce((s, item) => s + item.price * item.quantity, 0);
 
-      if (autoPrint && newOrder) {
-        // Construct print job from order for thermal printing
+      newOrder = {
+        id: `order-${Date.now()}`,
+        orderNumber: orderNum,
+        tableId: orderData.tableId,
+        tableName: targetTable ? targetTable.name : `Mesa ${orderData.tableId}`,
+        waiterName: orderData.waiterName || 'Garçom',
+        status: 'OPEN',
+        createdAt: new Date().toISOString(),
+        printedToKitchen: false,
+        total: calculatedTotal,
+        items: orderItems
+      };
+      await saveFirestoreOrder(newOrder);
+
+      // Set table to OCCUPIED
+      if (targetTable) {
+        await saveFirestoreTable({
+          id: targetTable.id,
+          number: targetTable.number,
+          name: targetTable.name,
+          capacity: targetTable.capacity,
+          customerCount: orderData.customerCount || targetTable.customerCount || 1,
+          status: 'OCCUPIED'
+        });
+      }
+
+      // Create print job if autoPrint
+      if (autoPrint) {
         const pJob: PrintJob = {
           id: `pj-${Date.now()}`,
           orderId: newOrder.id,
@@ -98,28 +193,50 @@ export default function App() {
           createdAt: newOrder.createdAt,
           status: 'PENDING'
         };
-        setActivePrintJobForThermal(pJob);
-        setTimeout(() => {
-          window.print();
-        }, 150);
+        await saveFirestorePrintJob(pJob);
       }
-
-      return newOrder;
-    } else {
-      throw new Error('Falha ao enviar pedido');
     }
+
+    await fetchAllData();
+
+    if (autoPrint && newOrder) {
+      const pJob: PrintJob = {
+        id: `pj-${Date.now()}`,
+        orderId: newOrder.id,
+        orderNumber: newOrder.orderNumber,
+        tableName: newOrder.tableName,
+        waiterName: newOrder.waiterName,
+        destination: 'KITCHEN',
+        items: newOrder.items.map((i: any) => ({ name: i.name, quantity: i.quantity, price: i.price, notes: i.notes })),
+        createdAt: newOrder.createdAt,
+        status: 'PENDING'
+      };
+      setActivePrintJobForThermal(pJob);
+      setTimeout(() => {
+        window.print();
+      }, 150);
+    }
+
+    return newOrder;
   };
 
   // Handler: Delete Item from active Order
   const handleDeleteItemFromOrder = async (orderId: string, itemId: string) => {
     try {
-      await fetch(`/api/orders/${orderId}/items/${itemId}`, {
-        method: 'DELETE'
-      });
-      await fetchAllData();
-    } catch (err) {
-      console.error('Error deleting item from order:', err);
+      const res = await fetch(`/api/orders/${orderId}/items/${itemId}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('API failed');
+    } catch {
+      const order = orders.find(o => o.id === orderId);
+      if (order) {
+        const updatedItems = order.items.filter(i => i.id !== itemId);
+        if (updatedItems.length === 0) {
+          await deleteFirestoreOrder(orderId);
+        } else {
+          await saveFirestoreOrder({ ...order, items: updatedItems });
+        }
+      }
     }
+    await fetchAllData();
   };
 
   // Handler: Change Order or Item Status in Kitchen View
@@ -129,11 +246,24 @@ export default function App() {
     itemId?: string,
     itemStatus?: OrderItemStatus
   ) => {
-    await fetch(`/api/orders/${orderId}/status`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status, itemId, itemStatus })
-    });
+    try {
+      const res = await fetch(`/api/orders/${orderId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status, itemId, itemStatus })
+      });
+      if (!res.ok) throw new Error('API failed');
+    } catch {
+      const order = orders.find(o => o.id === orderId);
+      if (order) {
+        let updated = { ...order };
+        if (status) updated.status = status as any;
+        if (itemId && itemStatus) {
+          updated.items = updated.items.map(i => i.id === itemId ? { ...i, status: itemStatus } : i);
+        }
+        await saveFirestoreOrder(updated);
+      }
+    }
     fetchAllData();
   };
 
@@ -145,60 +275,147 @@ export default function App() {
     discount: number;
     waiterName: string;
   }) => {
-    const res = await fetch('/api/orders/checkout', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(checkoutData)
-    });
-
-    if (res.ok) {
-      await fetchAllData();
-    } else {
-      throw new Error('Falha ao concluir fechamento');
+    let success = false;
+    try {
+      const res = await fetch('/api/orders/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(checkoutData)
+      });
+      if (res.ok) success = true;
+    } catch {
+      // API fallback
     }
+
+    if (!success) {
+      const tableOrders = orders.filter(o => o.tableId === checkoutData.tableId && o.status !== 'CLOSED');
+      const subtotal = tableOrders.reduce((sum, o) => sum + o.items.reduce((iSum, item) => iSum + (item.price * item.quantity), 0), 0);
+      const totalAmount = subtotal + checkoutData.serviceFee - checkoutData.discount;
+
+      const record: PaymentRecord = {
+        id: `pay-${Date.now()}`,
+        orderId: tableOrders[0]?.id || `ord-${Date.now()}`,
+        tableId: checkoutData.tableId,
+        tableName: tables.find(t => t.id === checkoutData.tableId)?.name || checkoutData.tableId,
+        waiterName: checkoutData.waiterName,
+        subtotal,
+        serviceFee: checkoutData.serviceFee,
+        discount: checkoutData.discount,
+        total: totalAmount,
+        paymentMethod: checkoutData.paymentMethod,
+        timestamp: new Date().toISOString(),
+        itemsSummary: tableOrders.flatMap(o => o.items.map(i => ({ name: i.name, quantity: i.quantity, price: i.price })))
+      };
+      await saveFirestorePaymentRecord(record);
+
+      for (const ord of tableOrders) {
+        await saveFirestoreOrder({ ...ord, status: 'CLOSED' });
+      }
+
+      const table = tables.find(t => t.id === checkoutData.tableId);
+      if (table) {
+        await saveFirestoreTable({
+          id: table.id,
+          number: table.number,
+          name: table.name,
+          capacity: table.capacity,
+          status: 'FREE'
+        });
+      }
+    }
+
+    await fetchAllData();
   };
 
   // Handler: Add/Update/Delete Product
   const handleAddProduct = async (prodData: Omit<Product, 'id'>) => {
-    await fetch('/api/products', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(prodData)
-    });
+    const newP: Product = {
+      ...prodData,
+      id: `prod-${Date.now()}`
+    };
+    try {
+      const res = await fetch('/api/products', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(prodData)
+      });
+      if (!res.ok) throw new Error('API failed');
+    } catch {
+      await saveFirestoreProduct(newP);
+    }
     fetchAllData();
   };
 
   const handleUpdateProduct = async (id: string, updates: Partial<Product>) => {
-    await fetch(`/api/products/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates)
-    });
+    try {
+      const res = await fetch(`/api/products/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+      if (!res.ok) throw new Error('API failed');
+    } catch {
+      const p = products.find(prod => prod.id === id);
+      if (p) {
+        await saveFirestoreProduct({ ...p, ...updates });
+      }
+    }
     fetchAllData();
   };
 
   const handleDeleteProduct = async (id: string) => {
-    await fetch(`/api/products/${id}`, { method: 'DELETE' });
+    try {
+      const res = await fetch(`/api/products/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('API failed');
+    } catch {
+      await deleteFirestoreProduct(id);
+    }
     fetchAllData();
   };
 
   // Handler: Add Table
   const handleAddTable = async (name: string, capacity: number) => {
-    await fetch('/api/tables', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, capacity })
-    });
+    const newT: Table = {
+      id: `table-${Date.now()}`,
+      number: tables.length + 1,
+      name,
+      capacity,
+      status: 'FREE'
+    };
+    try {
+      const res = await fetch('/api/tables', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, capacity })
+      });
+      if (!res.ok) throw new Error('API failed');
+    } catch {
+      await saveFirestoreTable(newT);
+    }
     fetchAllData();
   };
 
   // Handler: Update Table Status
   const handleUpdateTableStatus = async (tableId: string, status: TableStatus) => {
-    await fetch(`/api/tables/${tableId}/status`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status })
-    });
+    try {
+      const res = await fetch(`/api/tables/${tableId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status })
+      });
+      if (!res.ok) throw new Error('API failed');
+    } catch {
+      const t = tables.find(tab => tab.id === tableId);
+      if (t) {
+        await saveFirestoreTable({
+          id: t.id,
+          number: t.number,
+          name: t.name,
+          capacity: t.capacity,
+          status
+        });
+      }
+    }
     fetchAllData();
   };
 
@@ -212,14 +429,27 @@ export default function App() {
 
   // Handler: Mark Print Job Done
   const handleMarkJobPrinted = async (jobId: string) => {
-    await fetch(`/api/print-jobs/${jobId}/printed`, { method: 'POST' });
+    try {
+      const res = await fetch(`/api/print-jobs/${jobId}/printed`, { method: 'POST' });
+      if (!res.ok) throw new Error('API failed');
+    } catch {
+      const job = printJobs.find(j => j.id === jobId);
+      if (job) {
+        await saveFirestorePrintJob({ ...job, status: 'PRINTED' });
+      }
+    }
     fetchAllData();
   };
 
   // Reset Demo Data
   const handleResetDemo = async () => {
     if (confirm('Deseja restaurar os dados de demonstração com mesas e cardápio de testes?')) {
-      await fetch('/api/reset-demo', { method: 'POST' });
+      try {
+        const res = await fetch('/api/reset-demo', { method: 'POST' });
+        if (!res.ok) throw new Error('API failed');
+      } catch {
+        await resetFirestoreData();
+      }
       fetchAllData();
     }
   };
