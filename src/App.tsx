@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Header, AppMode } from './components/Header';
 import { TablesView } from './components/TablesView';
 import { MobileOrderView } from './components/MobileOrderView';
@@ -30,12 +30,31 @@ export default function App() {
   const [currentMode, setCurrentMode] = useState<AppMode>('TABLES');
   const [isStandaloneMobile, setIsStandaloneMobile] = useState<boolean>(false);
   const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
-  const [tables, setTables] = useState<(Table & { activeOrders: Order[]; currentTotal: number })[]>(
-    INITIAL_TABLES.map(t => ({ ...t, activeOrders: [], currentTotal: 0 }))
-  );
+  const [rawTables, setRawTables] = useState<Table[]>(INITIAL_TABLES);
   const [orders, setOrders] = useState<Order[]>([]);
   const [printJobs, setPrintJobs] = useState<PrintJob[]>([]);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
+
+  // Compute enriched tables with activeOrders and currentTotal derived from orders
+  const tables = useMemo(() => {
+    return rawTables.map(t => {
+      const activeOrders = (orders || []).filter(o => o.tableId === t.id && o.status !== 'CLOSED');
+      const currentTotal = activeOrders.reduce((sum, ord) => {
+        const itemsSum = (ord.items || []).reduce((iSum, item) => iSum + ((Number(item.price) || 0) * (Number(item.quantity) || 0)), 0);
+        return sum + itemsSum;
+      }, 0);
+      const oldestOrder = activeOrders[0];
+      const latestOrder = activeOrders[activeOrders.length - 1];
+
+      return {
+        ...t,
+        activeOrders,
+        currentTotal,
+        openedAt: oldestOrder?.createdAt || t.openedAt,
+        waiter: latestOrder?.waiterName || t.waiter
+      };
+    });
+  }, [rawTables, orders]);
 
   // Check URL query params for ?mode=mobile
   useEffect(() => {
@@ -90,7 +109,7 @@ export default function App() {
       if (!loadedPrintJobs.length) loadedPrintJobs = await getFirestorePrintJobs();
 
       setProducts(loadedProducts.length ? loadedProducts : INITIAL_PRODUCTS);
-      setTables((loadedTables.length ? loadedTables : INITIAL_TABLES) as any);
+      setRawTables(loadedTables.length ? loadedTables : INITIAL_TABLES);
       setOrders(loadedOrders);
       setPrintJobs(loadedPrintJobs);
     } catch (err) {
@@ -102,7 +121,7 @@ export default function App() {
         getFirestorePrintJobs()
       ]);
       setProducts(p.length ? p : INITIAL_PRODUCTS);
-      setTables((t.length ? t : INITIAL_TABLES) as any);
+      setRawTables(t.length ? t : INITIAL_TABLES);
       setOrders(o);
       setPrintJobs(pj);
     } finally {

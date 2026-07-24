@@ -19,7 +19,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   onClose,
   onConfirmCheckout
 }) => {
-  const subtotal = table.currentTotal;
+  const subtotal = table.currentTotal || 0;
+  const activeOrders = table.activeOrders || [];
   const [includeServiceFee, setIncludeServiceFee] = useState<boolean>(() => localStorage.getItem('defaultServiceFeeEnabled') === 'true');
   const [discountAmount, setDiscountAmount] = useState(0);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('PIX');
@@ -32,7 +33,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const perPersonAmount = splitCount > 0 ? finalTotal / splitCount : finalTotal;
 
   // Flatten all items across active orders for itemized bill, consolidated by name
-  const consolidatedItems = table.activeOrders.flatMap(o => o.items).reduce((acc: any[], item) => {
+  const consolidatedItems = activeOrders.flatMap(o => o.items || []).reduce((acc: any[], item) => {
     const price = Number(item.price) || 0;
     const existing = acc.find(i => i.name === item.name && (i.notes || '') === (item.notes || ''));
     if (existing) {

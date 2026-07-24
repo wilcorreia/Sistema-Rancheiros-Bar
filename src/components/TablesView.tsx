@@ -110,8 +110,10 @@ export const TablesView: React.FC<TablesViewProps> = ({
       {/* Tables Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
         {filteredTables.map(table => {
+          const activeOrders = table.activeOrders || [];
+          const currentTotal = table.currentTotal || 0;
           const elapsedTime = formatElapsedTime(table.openedAt);
-          const itemCount = table.activeOrders.reduce((sum, ord) => sum + ord.items.length, 0);
+          const itemCount = activeOrders.reduce((sum, ord) => sum + (ord.items || []).length, 0);
 
           return (
             <div
@@ -159,7 +161,7 @@ export const TablesView: React.FC<TablesViewProps> = ({
                       </button>
                     </div>
                     <div className="text-2xl font-black text-slate-900">
-                      R$ {table.currentTotal.toFixed(2).replace('.', ',')}
+                      R$ {currentTotal.toFixed(2).replace('.', ',')}
                     </div>
                   </div>
                 ) : (
@@ -275,7 +277,7 @@ export const TablesView: React.FC<TablesViewProps> = ({
             <div className="pt-4 border-t border-slate-200 flex flex-wrap justify-between items-center gap-2">
               <div>
                 <span className="text-xs text-slate-500 block">Total Geral</span>
-                <span className="text-xl font-black text-slate-900">R$ {selectedTableForDetail.currentTotal.toFixed(2).replace('.', ',')}</span>
+                <span className="text-xl font-black text-slate-900">R$ {(selectedTableForDetail.currentTotal || 0).toFixed(2).replace('.', ',')}</span>
               </div>
               <div className="flex flex-wrap gap-2">
                 <button
