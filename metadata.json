@@ -1,0 +1,6 @@
+{
+  "name": "Rancheiro's Bar - Comandas e Gestão",
+  "description": "Sistema completo para o Rancheiro's Bar • Chopp & Petiscos com gestão de mesas, lançamentos de pedidos via celular, impressão de comandas para cozinha/bar e relatórios de vendas. Endereço: Rua Presidente Café Filho, 355 - Vila Almeida.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

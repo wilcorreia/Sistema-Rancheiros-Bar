@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@media print {
+  @page {
+    size: 80mm auto;
+    margin: 0;
+  }
+
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-family: Arial, Helvetica, sans-serif !important;
+  }
+
+  /* Hide absolutely everything on the screen when printing */
+  body * {
+    visibility: hidden !important;
+  }
+
+  /* Reveal ONLY the active printable receipts and their contents */
+  #thermal-receipt-printable,
+  #thermal-receipt-printable *,
+  #customer-printable-receipt,
+  #customer-printable-receipt * {
+    visibility: visible !important;
+  }
+
+  /* Absolute position at top-left of the thermal paper roll */
+  #thermal-receipt-printable,
+  #customer-printable-receipt {
+    display: block !important;
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 72mm !important;
+    margin: 0 !important;
+    padding: 2mm !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+
+  #thermal-receipt-printable *,
+  #customer-printable-receipt * {
+    color: #000000 !important;
+    border-color: #000000 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+}
+

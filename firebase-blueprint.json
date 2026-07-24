@@ -1,0 +1,114 @@
+{
+  "entities": {
+    "product": {
+      "title": "Product",
+      "description": "Menu product item",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "maxLength": 100 },
+        "category": { "type": "string", "maxLength": 50 },
+        "price": { "type": "number" },
+        "description": { "type": "string", "maxLength": 500 },
+        "available": { "type": "boolean" },
+        "printDestination": { "type": "string", "enum": ["KITCHEN", "BAR", "DESSERT"] },
+        "image": { "type": "string" }
+      },
+      "required": ["id", "name", "price", "printDestination"]
+    },
+    "table": {
+      "title": "Table",
+      "description": "Restaurant table entity",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "maxLength": 50 },
+        "number": { "type": "number" },
+        "capacity": { "type": "number" },
+        "status": { "type": "string", "enum": ["FREE", "OCCUPIED", "BILL_REQUESTED", "RESERVED"] },
+        "waiter": { "type": "string" },
+        "openedAt": { "type": "string" },
+        "customerCount": { "type": "number" }
+      },
+      "required": ["id", "name", "number", "capacity", "status"]
+    },
+    "order": {
+      "title": "Order",
+      "description": "Customer order placed on a table",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "orderNumber": { "type": "number" },
+        "tableId": { "type": "string" },
+        "tableName": { "type": "string" },
+        "waiterName": { "type": "string" },
+        "items": { "type": "array" },
+        "total": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "status": { "type": "string", "enum": ["OPEN", "IN_PREPARATION", "SERVED", "CLOSED"] },
+        "printedToKitchen": { "type": "boolean" },
+        "printedAt": { "type": "string" }
+      },
+      "required": ["id", "orderNumber", "tableId", "tableName", "total", "createdAt", "status"]
+    },
+    "paymentRecord": {
+      "title": "PaymentRecord",
+      "description": "Checkout payment receipt record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "orderId": { "type": "string" },
+        "tableId": { "type": "string" },
+        "tableName": { "type": "string" },
+        "waiterName": { "type": "string" },
+        "subtotal": { "type": "number" },
+        "serviceFee": { "type": "number" },
+        "discount": { "type": "number" },
+        "total": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["PIX", "CREDIT", "DEBIT", "CASH"] },
+        "timestamp": { "type": "string" },
+        "itemsSummary": { "type": "array" }
+      },
+      "required": ["id", "tableId", "tableName", "total", "paymentMethod", "timestamp"]
+    },
+    "printJob": {
+      "title": "PrintJob",
+      "description": "Thermal printing job queue item",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "orderId": { "type": "string" },
+        "orderNumber": { "type": "number" },
+        "tableName": { "type": "string" },
+        "waiterName": { "type": "string" },
+        "destination": { "type": "string", "enum": ["KITCHEN", "BAR", "DESSERT"] },
+        "items": { "type": "array" },
+        "createdAt": { "type": "string" },
+        "status": { "type": "string", "enum": ["PENDING", "PRINTED"] }
+      },
+      "required": ["id", "orderId", "orderNumber", "tableName", "destination", "createdAt", "status"]
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": "#/entities/product",
+      "description": "Catalog of menu items"
+    },
+    "/tables/{tableId}": {
+      "schema": "#/entities/table",
+      "description": "Restaurant tables and current state"
+    },
+    "/orders/{orderId}": {
+      "schema": "#/entities/order",
+      "description": "Orders placed at tables"
+    },
+    "/paymentRecords/{paymentRecordId}": {
+      "schema": "#/entities/paymentRecord",
+      "description": "Payment and checkout receipts"
+    },
+    "/printJobs/{printJobId}": {
+      "schema": "#/entities/printJob",
+      "description": "Thermal printing queue"
+    }
+  }
+}
