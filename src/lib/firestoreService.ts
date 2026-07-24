@@ -63,15 +63,33 @@ export async function getFirestoreTables(): Promise<Table[]> {
       Promise.all(INITIAL_TABLES.map(t => setDoc(doc(db, TABLES_COL, t.id), t))).catch(err => {
         console.warn('Background table seeding warning:', err);
       });
-      return [...INITIAL_TABLES];
+      return deduplicateTableList([...INITIAL_TABLES]);
     }
     const tables = snapshot.docs.map(d => d.data() as Table);
-    const sorted = tables.sort((a, b) => a.number - b.number);
-    return sorted.length > 0 ? sorted : [...INITIAL_TABLES];
+    return deduplicateTableList(tables);
   } catch (err) {
     console.error('Error reading tables from Firestore:', err);
-    return [...INITIAL_TABLES];
+    return deduplicateTableList([...INITIAL_TABLES]);
   }
+}
+
+export function deduplicateTableList(tablesList: Table[]): Table[] {
+  const map = new Map<string, Table>();
+  tablesList.forEach(t => {
+    const key = t.number && Number(t.number) > 0 
+      ? `num-${t.number}`
+      : `name-${(t.name || '').toLowerCase().replace(/\s+/g, '').replace(/^mesa0*/i, '')}`;
+    
+    if (!map.has(key)) {
+      map.set(key, t);
+    } else {
+      const existing = map.get(key)!;
+      if (existing.status !== 'OCCUPIED' && t.status === 'OCCUPIED') {
+        map.set(key, t);
+      }
+    }
+  });
+  return Array.from(map.values()).sort((a, b) => (Number(a.number) || 0) - (Number(b.number) || 0));
 }
 
 export async function saveFirestoreTable(table: Table): Promise<Table> {
@@ -81,6 +99,14 @@ export async function saveFirestoreTable(table: Table): Promise<Table> {
     console.error('Error saving table to Firestore:', err);
   }
   return table;
+}
+
+export async function deleteFirestoreTable(tableId: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, TABLES_COL, tableId));
+  } catch (err) {
+    console.error('Error deleting table from Firestore:', err);
+  }
 }
 
 // --- ORDERS ---

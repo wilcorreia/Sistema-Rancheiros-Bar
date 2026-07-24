@@ -1,19 +1,29 @@
 import React, { useState } from 'react';
-import { Product, PrintDestination } from '../types';
-import { Plus, Search, Edit2, Trash2, Check, X, Utensils, Printer } from 'lucide-react';
+import { Product, PrintDestination, Table } from '../types';
+import { Plus, Search, Edit2, Trash2, Check, X, Utensils, Printer, LayoutGrid, Sparkles } from 'lucide-react';
 
 interface ProductsManagerProps {
   products: Product[];
   onAddProduct: (product: Omit<Product, 'id'>) => void;
   onUpdateProduct: (id: string, updates: Partial<Product>) => void;
   onDeleteProduct: (id: string) => void;
+  tables?: Table[];
+  onAddTable?: (name: string, capacity: number, number?: number) => void;
+  onUpdateTable?: (id: string, updates: Partial<Table>) => void;
+  onDeleteTable?: (id: string) => void;
+  onDeduplicateTables?: () => void;
 }
 
 export const ProductsManager: React.FC<ProductsManagerProps> = ({
   products,
   onAddProduct,
   onUpdateProduct,
-  onDeleteProduct
+  onDeleteProduct,
+  tables = [],
+  onAddTable,
+  onUpdateTable,
+  onDeleteTable,
+  onDeduplicateTables
 }) => {
   const [selectedCategory, setSelectedCategory] = useState<string>('TODOS');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -139,6 +149,57 @@ export const ProductsManager: React.FC<ProductsManagerProps> = ({
   const [newCatName, setNewCatName] = useState('');
   const [editingCategory, setEditingCategory] = useState<string | null>(null);
   const [editingCatNewName, setEditingCatNewName] = useState('');
+
+  // Table Management State
+  const [showTableManager, setShowTableManager] = useState(false);
+  const [tableModalOpen, setTableModalOpen] = useState(false);
+  const [editingTableId, setEditingTableId] = useState<string | null>(null);
+  const [tableNameInput, setTableNameInput] = useState('');
+  const [tableNumberInput, setTableNumberInput] = useState<number | ''>('');
+  const [tableCapacityInput, setTableCapacityInput] = useState<number>(4);
+
+  const handleOpenAddTable = () => {
+    setEditingTableId(null);
+    setTableNameInput(`Mesa ${(tables.length + 1).toString().padStart(2, '0')}`);
+    setTableNumberInput(tables.length + 1);
+    setTableCapacityInput(4);
+    setTableModalOpen(true);
+  };
+
+  const handleOpenEditTable = (tbl: Table) => {
+    setEditingTableId(tbl.id);
+    setTableNameInput(tbl.name);
+    setTableNumberInput(tbl.number);
+    setTableCapacityInput(tbl.capacity || 4);
+    setTableModalOpen(true);
+  };
+
+  const handleSaveTable = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tableNameInput.trim()) return;
+
+    const num = tableNumberInput !== '' ? Number(tableNumberInput) : undefined;
+    const cap = Number(tableCapacityInput) || 4;
+
+    if (editingTableId && onUpdateTable) {
+      onUpdateTable(editingTableId, {
+        name: tableNameInput.trim(),
+        number: num || 1,
+        capacity: cap
+      });
+    } else if (onAddTable) {
+      onAddTable(tableNameInput.trim(), cap, num);
+    }
+
+    setTableModalOpen(false);
+    setEditingTableId(null);
+  };
+
+  const handleDeleteTableClick = (tbl: Table) => {
+    if (confirm(`Deseja realmente excluir a mesa "${tbl.name}"?`)) {
+      if (onDeleteTable) onDeleteTable(tbl.id);
+    }
+  };
 
   const categoriesList: string[] = Array.from<string>(new Set(products.map(p => (p.category || 'Geral'))));
 
@@ -400,6 +461,74 @@ export const ProductsManager: React.FC<ProductsManagerProps> = ({
             ))}
           </div>
         </div>
+
+        {/* Tables / Mesas Manager Block */}
+        <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+            <div>
+              <span className="font-extrabold text-amber-400 text-xs block uppercase tracking-wider">Cadastrar & Gerenciar Mesas ({tables.length} mesas)</span>
+              <span className="text-[11px] text-slate-400">Adicione, edite ou remova mesas do salão. Use "Limpar Duplicadas" para eliminar mesas repetidas.</span>
+            </div>
+            <div className="flex items-center space-x-2">
+              {onDeduplicateTables && (
+                <button
+                  onClick={() => {
+                    if (confirm('Deseja procurar e eliminar mesas duplicadas no sistema?')) {
+                      onDeduplicateTables();
+                    }
+                  }}
+                  className="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold px-3 py-1.5 rounded-xl border border-slate-700 transition text-xs flex items-center space-x-1"
+                  title="Remover mesas com mesmo número ou nome"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Limpar Duplicadas</span>
+                </button>
+              )}
+              <button
+                onClick={() => handleOpenAddTable()}
+                className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-3 py-1.5 rounded-xl transition text-xs flex items-center space-x-1"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ Cadastrar Mesa</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Table List Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2.5 pt-2">
+            {tables.map(tbl => (
+              <div key={tbl.id} className="bg-slate-900 border border-slate-800 p-2.5 rounded-xl flex flex-col justify-between space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-extrabold text-white text-xs truncate" title={tbl.name}>{tbl.name}</span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-bold uppercase ${
+                    tbl.status === 'OCCUPIED' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                  }`}>
+                    {tbl.status === 'OCCUPIED' ? 'Ocupada' : 'Livre'}
+                  </span>
+                </div>
+                <div className="text-[11px] text-slate-400 flex justify-between items-center">
+                  <span>Mesa #{tbl.number}</span>
+                  <div className="flex items-center space-x-1">
+                    <button
+                      onClick={() => handleOpenEditTable(tbl)}
+                      className="p-1 hover:bg-slate-800 text-slate-300 hover:text-amber-400 rounded transition"
+                      title="Editar Mesa"
+                    >
+                      <Edit2 className="w-3 h-3" />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteTableClick(tbl)}
+                      className="p-1 hover:bg-slate-800 text-slate-400 hover:text-red-400 rounded transition"
+                      title="Excluir Mesa"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* Controls Header */}
@@ -641,6 +770,78 @@ export const ProductsManager: React.FC<ProductsManagerProps> = ({
                   className="bg-slate-900 hover:bg-slate-800 text-amber-400 font-extrabold px-5 py-2 rounded-xl"
                 >
                   Salvar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* Modal: Add/Edit Table */}
+      {tableModalOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 text-slate-100 border border-slate-800 p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+              <h3 className="font-extrabold text-base text-amber-400">
+                {editingTableId ? 'Editar Mesa' : 'Cadastrar Nova Mesa'}
+              </h3>
+              <button onClick={() => setTableModalOpen(false)} className="text-slate-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveTable} className="space-y-4 text-xs">
+              <div>
+                <label className="block text-slate-300 font-bold mb-1">Nome da Mesa</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: Mesa 01, Varanda 02..."
+                  value={tableNameInput}
+                  onChange={e => setTableNameInput(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white outline-none focus:border-amber-400 text-xs"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 font-bold mb-1">Número da Mesa</label>
+                  <input
+                    type="number"
+                    min="1"
+                    required
+                    placeholder="1, 2, 3..."
+                    value={tableNumberInput}
+                    onChange={e => setTableNumberInput(e.target.value ? Number(e.target.value) : '')}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white outline-none focus:border-amber-400 text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-bold mb-1">Capacidade (Pessoas)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    required
+                    value={tableCapacityInput}
+                    onChange={e => setTableCapacityInput(Number(e.target.value))}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white outline-none focus:border-amber-400 text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setTableModalOpen(false)}
+                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-bold py-2.5 rounded-xl transition text-xs"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold py-2.5 rounded-xl transition text-xs"
+                >
+                  {editingTableId ? 'Atualizar Mesa' : 'Salvar Mesa'}
                 </button>
               </div>
             </form>

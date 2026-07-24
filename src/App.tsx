@@ -18,6 +18,8 @@ import {
   saveFirestoreProduct,
   deleteFirestoreProduct,
   saveFirestoreTable,
+  deleteFirestoreTable,
+  deduplicateTableList,
   saveFirestoreOrder,
   saveFirestorePaymentRecord,
   saveFirestorePrintJob,
@@ -26,22 +28,41 @@ import {
   deleteFirestoreOrder
 } from './lib/firestoreService';
 
+export function isOrderForTable(order: Order, table: Table): boolean {
+  if (order.status === 'CLOSED') return false;
+  if (!order.tableId && !order.tableName) return false;
+  if (order.tableId === table.id) return true;
+  if (String(order.tableId) === String(table.number)) return true;
+
+  if (order.tableName && table.name) {
+    const normOrder = order.tableName.toLowerCase().replace(/\s+/g, '').replace(/^mesa0*/i, '');
+    const normTable = table.name.toLowerCase().replace(/\s+/g, '').replace(/^mesa0*/i, '');
+    if (normOrder === normTable) return true;
+  }
+
+  if (order.tableId && table.name) {
+    const normOrderId = String(order.tableId).toLowerCase().replace(/\s+/g, '').replace(/^(table-|t-?|mesa0*)/i, '');
+    const normTable = table.name.toLowerCase().replace(/\s+/g, '').replace(/^mesa0*/i, '');
+    if (normOrderId === normTable) return true;
+  }
+
+  return false;
+}
+
 export default function App() {
   const [currentMode, setCurrentMode] = useState<AppMode>('TABLES');
   const [isStandaloneMobile, setIsStandaloneMobile] = useState<boolean>(false);
   const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
-  const [rawTables, setRawTables] = useState<Table[]>(INITIAL_TABLES);
+  const [rawTables, setRawTables] = useState<Table[]>(deduplicateTableList(INITIAL_TABLES));
   const [orders, setOrders] = useState<Order[]>([]);
   const [printJobs, setPrintJobs] = useState<PrintJob[]>([]);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
   // Compute enriched tables with activeOrders and currentTotal derived from orders
   const tables = useMemo(() => {
-    return rawTables.map(t => {
-      const activeOrders = (orders || []).filter(o => 
-        (o.tableId === t.id || o.tableName?.toLowerCase() === t.name?.toLowerCase() || String(o.tableId) === String(t.number)) && 
-        o.status !== 'CLOSED'
-      );
+    const deduped = deduplicateTableList(rawTables);
+    return deduped.map(t => {
+      const activeOrders = (orders || []).filter(o => isOrderForTable(o, t));
       const currentTotal = activeOrders.reduce((sum, ord) => {
         const itemsSum = (ord.items || []).reduce((iSum, item) => iSum + ((Number(item.price) || 0) * (Number(item.quantity) || 0)), 0);
         return sum + itemsSum;
@@ -214,7 +235,15 @@ export default function App() {
     },
     autoPrint = false
   ) => {
-    const targetTable = rawTables.find(t => t.id === orderData.tableId);
+    const targetTable = rawTables.find(t => 
+      t.id === orderData.tableId || 
+      String(t.number) === String(orderData.tableId) ||
+      isOrderForTable({ tableId: orderData.tableId, tableName: orderData.tableId } as any, t)
+    );
+
+    const canonicalTableId = targetTable ? targetTable.id : orderData.tableId;
+    const canonicalTableName = targetTable ? targetTable.name : `Mesa ${orderData.tableId}`;
+
     const orderNum = Math.max(...orders.map(o => o.orderNumber || 0), 100) + 1;
     const orderItems = orderData.items.map((it, idx) => ({
       id: `item-${Date.now()}-${idx}`,
@@ -231,8 +260,8 @@ export default function App() {
     const newOrder: Order = {
       id: `order-${Date.now()}`,
       orderNumber: orderNum,
-      tableId: orderData.tableId,
-      tableName: targetTable ? targetTable.name : `Mesa ${orderData.tableId}`,
+      tableId: canonicalTableId,
+      tableName: canonicalTableName,
       waiterName: orderData.waiterName || 'Rancheiros',
       customerName: orderData.customerName,
       status: 'OPEN',
@@ -244,7 +273,7 @@ export default function App() {
 
     // Instant state update so table never appears empty
     setOrders(prev => [...prev.filter(o => o.id !== newOrder.id), newOrder]);
-    setRawTables(prev => prev.map(t => t.id === orderData.tableId ? { ...t, status: 'OCCUPIED' } : t));
+    setRawTables(prev => prev.map(t => t.id === canonicalTableId ? { ...t, status: 'OCCUPIED', waiter: orderData.waiterName || t.waiter } : t));
 
     // Save order to Firestore
     try {
@@ -256,7 +285,8 @@ export default function App() {
           name: targetTable.name,
           capacity: targetTable.capacity,
           customerCount: orderData.customerCount || targetTable.customerCount || 1,
-          status: 'OCCUPIED'
+          status: 'OCCUPIED',
+          waiter: orderData.waiterName || targetTable.waiter
         });
       }
     } catch (err) {
@@ -492,21 +522,67 @@ export default function App() {
     }
   };
 
-  // Handler: Add Table
-  const handleAddTable = async (name: string, capacity: number) => {
+  // Handler: Table CRUD & Deduplication
+  const handleAddTable = async (name: string, capacity: number, number?: number) => {
+    const tableNum = number !== undefined ? number : (rawTables.length + 1);
     const newT: Table = {
       id: `table-${Date.now()}`,
-      number: rawTables.length + 1,
-      name,
-      capacity,
+      number: tableNum,
+      name: name || `Mesa ${tableNum}`,
+      capacity: capacity || 4,
       status: 'FREE'
     };
-    setRawTables(prev => [...prev.filter(t => t.id !== newT.id), newT]);
     try {
+      const res = await fetch('/api/tables', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newT.name, capacity: newT.capacity, number: newT.number })
+      });
+      if (res.ok) {
+        const created = await res.json();
+        setRawTables(prev => deduplicateTableList([...prev, created]));
+      } else {
+        throw new Error('API failed');
+      }
+    } catch {
       await saveFirestoreTable(newT);
-    } catch (err) {
-      console.error('Error saving table in Firestore:', err);
+      setRawTables(prev => deduplicateTableList([...prev, newT]));
     }
+    fetchAllData();
+  };
+
+  const handleUpdateTable = async (id: string, updates: Partial<Table>) => {
+    setRawTables(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
+    try {
+      await fetch(`/api/tables/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+    } catch {
+      const target = rawTables.find(t => t.id === id);
+      if (target) await saveFirestoreTable({ ...target, ...updates });
+    }
+    fetchAllData();
+  };
+
+  const handleDeleteTable = async (id: string) => {
+    setRawTables(prev => prev.filter(t => t.id !== id));
+    try {
+      await fetch(`/api/tables/${id}`, { method: 'DELETE' });
+    } catch {
+      await deleteFirestoreTable(id);
+    }
+    fetchAllData();
+  };
+
+  const handleDeduplicateTables = async () => {
+    try {
+      await fetch('/api/tables/deduplicate', { method: 'POST' });
+    } catch (err) {
+      console.error('Error deduplicating tables via API:', err);
+    }
+    fetchAllData();
   };
 
   // Handler: Update Table Status
@@ -689,6 +765,11 @@ export default function App() {
             onAddProduct={handleAddProduct}
             onUpdateProduct={handleUpdateProduct}
             onDeleteProduct={handleDeleteProduct}
+            tables={tables}
+            onAddTable={handleAddTable}
+            onUpdateTable={handleUpdateTable}
+            onDeleteTable={handleDeleteTable}
+            onDeduplicateTables={handleDeduplicateTables}
           />
         )}
       </main>

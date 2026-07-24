@@ -9,6 +9,8 @@ import {
   deleteFirestoreProduct,
   getFirestoreTables,
   saveFirestoreTable,
+  deleteFirestoreTable,
+  deduplicateTableList,
   getFirestoreOrders,
   saveFirestoreOrder,
   deleteFirestoreOrder,
@@ -25,9 +27,30 @@ const PORT = 3000;
 
 app.use(express.json());
 
+// Helper for matching orders to tables robustly across various ID/Name formats
+function isOrderForTable(order: Order, table: Table): boolean {
+  if (order.status === 'CLOSED') return false;
+  if (order.tableId === table.id) return true;
+  if (String(order.tableId) === String(table.number)) return true;
+
+  if (order.tableName && table.name) {
+    const normOrder = order.tableName.toLowerCase().replace(/\s+/g, '').replace(/^mesa0*/i, '');
+    const normTable = table.name.toLowerCase().replace(/\s+/g, '').replace(/^mesa0*/i, '');
+    if (normOrder === normTable) return true;
+  }
+
+  if (order.tableId && table.name) {
+    const normOrderId = String(order.tableId).toLowerCase().replace(/\s+/g, '').replace(/^(table-|t-?|mesa0*)/i, '');
+    const normTable = table.name.toLowerCase().replace(/\s+/g, '').replace(/^mesa0*/i, '');
+    if (normOrderId === normTable) return true;
+  }
+
+  return false;
+}
+
 // In-Memory Database Store with Firestore real-time persistence
 let products: Product[] = [...INITIAL_PRODUCTS];
-let tables: Table[] = [...INITIAL_TABLES];
+let tables: Table[] = deduplicateTableList([...INITIAL_TABLES]);
 let orders: Order[] = [...INITIAL_ORDERS];
 let paymentRecords: PaymentRecord[] = [];
 let printJobs: PrintJob[] = [];
@@ -40,7 +63,7 @@ async function syncFromFirestore() {
     if (p.length) products = p;
 
     const t = await getFirestoreTables();
-    if (t.length) tables = t;
+    if (t.length) tables = deduplicateTableList(t);
 
     const o = await getFirestoreOrders();
     if (o.length) {
@@ -159,9 +182,13 @@ app.delete('/api/categories/:name', async (req, res) => {
 
 // Tables API
 app.get('/api/tables', (req, res) => {
+  tables = deduplicateTableList(tables);
   const enrichedTables = tables.map(table => {
-    const tableOrders = orders.filter(o => o.tableId === table.id && o.status !== 'CLOSED');
-    const totalAmount = tableOrders.reduce((sum, ord) => sum + ord.total, 0);
+    const tableOrders = orders.filter(o => isOrderForTable(o, table));
+    const totalAmount = tableOrders.reduce((sum, ord) => {
+      const itemsTotal = (ord.items || []).reduce((iSum, i) => iSum + (Number(i.price) || 0) * (Number(i.quantity) || 1), 0);
+      return sum + (ord.total || itemsTotal || 0);
+    }, 0);
     return {
       ...table,
       activeOrders: tableOrders,
@@ -172,16 +199,79 @@ app.get('/api/tables', (req, res) => {
 });
 
 app.post('/api/tables', async (req, res) => {
+  const name = req.body.name || `Mesa ${tables.length + 1}`;
+  const number = req.body.number !== undefined ? Number(req.body.number) : (tables.length + 1);
+  const capacity = Number(req.body.capacity) || 4;
+
   const newTable: Table = {
-    id: `t-${Date.now()}`,
-    name: req.body.name || `Mesa ${tables.length + 1}`,
-    number: req.body.number || tables.length + 1,
-    capacity: Number(req.body.capacity) || 4,
+    id: `table-${Date.now()}`,
+    name,
+    number,
+    capacity,
     status: 'FREE'
   };
   tables.push(newTable);
+  tables = deduplicateTableList(tables);
   await saveFirestoreTable(newTable);
   res.status(201).json(newTable);
+});
+
+app.put('/api/tables/:id', async (req, res) => {
+  const { id } = req.params;
+  const index = tables.findIndex(t => t.id === id);
+  if (index === -1) return res.status(404).json({ error: 'Mesa não encontrada' });
+
+  tables[index] = {
+    ...tables[index],
+    name: req.body.name !== undefined ? req.body.name : tables[index].name,
+    number: req.body.number !== undefined ? Number(req.body.number) : tables[index].number,
+    capacity: req.body.capacity !== undefined ? Number(req.body.capacity) : tables[index].capacity
+  };
+
+  await saveFirestoreTable(tables[index]);
+  res.json(tables[index]);
+});
+
+app.delete('/api/tables/:id', async (req, res) => {
+  const { id } = req.params;
+  tables = tables.filter(t => t.id !== id);
+  await deleteFirestoreTable(id);
+  res.json({ success: true });
+});
+
+app.post('/api/tables/deduplicate', async (req, res) => {
+  try {
+    const allFsTables = await getFirestoreTables();
+    const uniqueMap = new Map<string, Table>();
+    const idsToDelete: string[] = [];
+
+    allFsTables.forEach(t => {
+      const key = t.number && Number(t.number) > 0 
+        ? `num-${t.number}`
+        : `name-${(t.name || '').toLowerCase().replace(/\s+/g, '').replace(/^mesa0*/i, '')}`;
+
+      if (!uniqueMap.has(key)) {
+        uniqueMap.set(key, t);
+      } else {
+        const existing = uniqueMap.get(key)!;
+        if (existing.status !== 'OCCUPIED' && t.status === 'OCCUPIED') {
+          idsToDelete.push(existing.id);
+          uniqueMap.set(key, t);
+        } else {
+          idsToDelete.push(t.id);
+        }
+      }
+    });
+
+    for (const id of idsToDelete) {
+      await deleteFirestoreTable(id);
+    }
+
+    tables = Array.from(uniqueMap.values()).sort((a, b) => (Number(a.number) || 0) - (Number(b.number) || 0));
+    res.json({ success: true, removedCount: idsToDelete.length, remainingCount: tables.length });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao deduplicar mesas' });
+  }
 });
 
 app.patch('/api/tables/:id/status', async (req, res) => {
@@ -211,15 +301,19 @@ app.get('/api/orders', (req, res) => {
 });
 
 app.post('/api/orders', async (req, res) => {
-  const { tableId, waiterName, items, customerCount } = req.body;
-  const table = tables.find(t => t.id === tableId);
+  const { tableId, waiterName, customerName, items, customerCount } = req.body;
+  const table = tables.find(t => 
+    t.id === tableId || 
+    String(t.number) === String(tableId) || 
+    (t.name && String(tableId) && t.name.toLowerCase().replace(/\s+/g, '').replace(/^mesa0*/i, '') === String(tableId).toLowerCase().replace(/\s+/g, '').replace(/^mesa0*/i, ''))
+  );
   
   if (!table) return res.status(400).json({ error: 'Mesa inválida' });
 
   const orderNum = nextOrderNumber++;
-  const orderTotal = items.reduce((acc: number, item: any) => acc + ((Number(item.price) || 0) * item.quantity), 0);
+  const orderTotal = (items || []).reduce((acc: number, item: any) => acc + ((Number(item.price) || 0) * (Number(item.quantity) || 1)), 0);
 
-  const formattedItems = items.map((item: any, idx: number) => ({
+  const formattedItems = (items || []).map((item: any, idx: number) => ({
     id: `item-${Date.now()}-${idx}`,
     productId: item.productId || `custom-${idx}`,
     name: item.name,
@@ -236,6 +330,7 @@ app.post('/api/orders', async (req, res) => {
     tableId: table.id,
     tableName: table.name,
     waiterName: waiterName || 'Garçom',
+    customerName: customerName || undefined,
     items: formattedItems,
     total: Math.round(orderTotal * 100) / 100,
     createdAt: new Date().toISOString(),
@@ -256,12 +351,13 @@ app.post('/api/orders', async (req, res) => {
   // Create single consolidated print job for all items on comanda
   if (formattedItems.length > 0) {
     const pJob: PrintJob = {
-      id: `pj-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      id: `pj-${Date.now()}`,
       orderId: newOrder.id,
       orderNumber: newOrder.orderNumber,
       tableName: newOrder.tableName,
       waiterName: newOrder.waiterName,
-      destination: 'KITCHEN', // Unified comanda production queue
+      customerName: newOrder.customerName,
+      destination: 'KITCHEN',
       items: formattedItems.map(i => ({ name: i.name, quantity: i.quantity, price: i.price, notes: i.notes })),
       createdAt: newOrder.createdAt,
       status: 'PENDING'

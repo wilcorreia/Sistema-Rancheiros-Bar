@@ -52,16 +52,22 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ job, storeName =
         <span>Senha #{job.orderNumber}</span>
       </div>
 
-      {job.customerName && (
-        <div className="text-center text-[12px] font-extrabold uppercase my-0.5 py-0.5 bg-gray-100 border border-black rounded">
-          Cliente: {job.customerName}
+      {/* Customer / Waiter */}
+      {job.customerName ? (
+        <div className="text-center text-[13px] font-black uppercase my-1 py-1 bg-black text-white rounded">
+          CLIENTE: {job.customerName}
         </div>
+      ) : (
+        job.waiterName && (
+          <div className="text-center text-[11px] font-bold my-0.5 uppercase">
+            GARÇOM: {job.waiterName}
+          </div>
+        )
       )}
 
-      {/* Waiter */}
-      {job.waiterName && (
-        <div className="text-center text-[11px] font-medium my-0.5">
-          Garçom: <strong className="font-bold">{job.waiterName}</strong>
+      {job.customerName && job.waiterName && (
+        <div className="text-center text-[10px] text-gray-700 font-medium my-0.5">
+          Garçom: {job.waiterName}
         </div>
       )}
 

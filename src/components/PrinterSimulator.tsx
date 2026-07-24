@@ -97,15 +97,23 @@ export const PrinterSimulator: React.FC<PrinterSimulatorProps> = ({
                     <span>Senha #{selectedJob.orderNumber}</span>
                   </div>
 
-                  {selectedJob.customerName && (
-                    <div className="text-center text-[10px] font-extrabold uppercase my-0.5 py-0.5 bg-gray-100 border border-black rounded">
-                      Cliente: {selectedJob.customerName}
+                  {selectedJob.customerName ? (
+                    <div className="text-center text-[11px] font-black uppercase my-1 py-1 bg-black text-white rounded">
+                      CLIENTE: {selectedJob.customerName}
                     </div>
+                  ) : (
+                    selectedJob.waiterName && (
+                      <div className="text-center text-[10px] font-bold uppercase my-0.5">
+                        GARÇOM: {selectedJob.waiterName}
+                      </div>
+                    )
                   )}
 
-                  <div className="text-center text-[10px] font-medium">
-                    Garçom: <strong className="font-bold">{selectedJob.waiterName}</strong>
-                  </div>
+                  {selectedJob.customerName && selectedJob.waiterName && (
+                    <div className="text-center text-[9px] text-gray-600 font-medium">
+                      Garçom: {selectedJob.waiterName}
+                    </div>
+                  )}
 
                   <div className="flex justify-between font-bold text-[10px] border-b border-dashed border-black pb-0.5 mt-1">
                     <span>QTD ITENS</span>
