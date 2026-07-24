@@ -337,26 +337,40 @@ app.patch('/api/orders/:id/status', async (req, res) => {
 // Checkout / Close Table
 app.post('/api/orders/checkout', async (req, res) => {
   const { tableId, paymentMethod, serviceFee, discount, waiterName } = req.body;
-  const table = tables.find(t => t.id === tableId);
+  const table = tables.find(t =>
+    t.id === tableId ||
+    String(t.number) === String(tableId) ||
+    t.name?.toLowerCase() === String(tableId).toLowerCase()
+  );
 
-  const activeOrders = orders.filter(o => o.tableId === tableId && o.status !== 'CLOSED');
+  const activeOrders = orders.filter(o =>
+    o.status !== 'CLOSED' && (
+      o.tableId === tableId ||
+      (table && (
+        o.tableId === table.id ||
+        String(o.tableId) === String(table.number) ||
+        o.tableName?.toLowerCase() === table.name?.toLowerCase()
+      ))
+    )
+  );
+
   if (activeOrders.length === 0) {
     return res.status(400).json({ error: 'Nenhum pedido aberto para esta mesa' });
   }
 
-  const subtotal = activeOrders.reduce((sum, o) => sum + o.total, 0);
+  const subtotal = activeOrders.reduce((sum, o) => sum + (o.total || 0), 0);
   const feeVal = Number(serviceFee) || 0;
   const discVal = Number(discount) || 0;
   const total = Math.max(0, subtotal + feeVal - discVal);
 
   const itemsSummaryMap = new Map<string, { name: string; quantity: number; price: number }>();
   activeOrders.forEach(o => {
-    o.items.forEach(i => {
-      const existing = itemsSummaryMap.get(i.productId);
+    (o.items || []).forEach(i => {
+      const existing = itemsSummaryMap.get(i.name);
       if (existing) {
         existing.quantity += i.quantity;
       } else {
-        itemsSummaryMap.set(i.productId, { name: i.name, quantity: i.quantity, price: i.price });
+        itemsSummaryMap.set(i.name, { name: i.name, quantity: i.quantity, price: Number(i.price) || 0 });
       }
     });
   });
@@ -364,8 +378,8 @@ app.post('/api/orders/checkout', async (req, res) => {
   const paymentRecord: PaymentRecord = {
     id: `pay-${Date.now()}`,
     orderId: activeOrders.map(o => o.id).join(','),
-    tableId: tableId,
-    tableName: table?.name || 'Mesa',
+    tableId: table ? table.id : tableId,
+    tableName: table?.name || `Mesa ${tableId}`,
     waiterName: waiterName || table?.waiter || 'Garçom',
     subtotal: Math.round(subtotal * 100) / 100,
     serviceFee: Math.round(feeVal * 100) / 100,

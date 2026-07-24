@@ -133,10 +133,17 @@ export default function App() {
       });
 
       setOrders(prev => {
+        const closedLocally = new Set(prev.filter(p => p.status === 'CLOSED').map(p => p.id));
         const mergedMap = new Map<string, Order>();
-        loadedOrders.forEach(o => mergedMap.set(o.id, o));
+        loadedOrders.forEach(o => {
+          if (closedLocally.has(o.id)) {
+            mergedMap.set(o.id, { ...o, status: 'CLOSED' });
+          } else {
+            mergedMap.set(o.id, o);
+          }
+        });
         prev.forEach(o => {
-          if (o.status === 'OPEN' && !mergedMap.has(o.id)) {
+          if (!mergedMap.has(o.id)) {
             mergedMap.set(o.id, o);
           }
         });
@@ -342,53 +349,100 @@ export default function App() {
     discount: number;
     waiterName: string;
   }) => {
-    let success = false;
-    try {
-      const res = await fetch('/api/orders/checkout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(checkoutData)
+    // 1. Find target table in rawTables
+    const targetTable = rawTables.find(t =>
+      t.id === checkoutData.tableId ||
+      String(t.number) === String(checkoutData.tableId) ||
+      t.name?.toLowerCase() === String(checkoutData.tableId).toLowerCase()
+    );
+
+    // 2. Find ALL active orders belonging to this table
+    const tableOrders = orders.filter(o =>
+      o.status !== 'CLOSED' && (
+        o.tableId === checkoutData.tableId ||
+        (targetTable && (
+          o.tableId === targetTable.id ||
+          String(o.tableId) === String(targetTable.number) ||
+          o.tableName?.toLowerCase() === targetTable.name?.toLowerCase()
+        ))
+      )
+    );
+
+    const subtotal = tableOrders.reduce((sum, o) => sum + (o.items || []).reduce((iSum, item) => iSum + ((Number(item.price) || 0) * (Number(item.quantity) || 0)), 0), 0);
+    const totalAmount = Math.max(0, subtotal + checkoutData.serviceFee - checkoutData.discount);
+
+    // Consolidated items summary for payment record
+    const itemsSummaryMap = new Map<string, { name: string; quantity: number; price: number }>();
+    tableOrders.forEach(o => {
+      (o.items || []).forEach(i => {
+        const existing = itemsSummaryMap.get(i.name);
+        if (existing) {
+          existing.quantity += i.quantity;
+        } else {
+          itemsSummaryMap.set(i.name, { name: i.name, quantity: i.quantity, price: Number(i.price) || 0 });
+        }
       });
-      if (res.ok) success = true;
-    } catch {
-      // API fallback
+    });
+
+    const record: PaymentRecord = {
+      id: `pay-${Date.now()}`,
+      orderId: tableOrders.map(o => o.id).join(','),
+      tableId: targetTable ? targetTable.id : checkoutData.tableId,
+      tableName: targetTable ? targetTable.name : `Mesa ${checkoutData.tableId}`,
+      waiterName: checkoutData.waiterName || targetTable?.waiter || 'Garçom',
+      subtotal: Math.round(subtotal * 100) / 100,
+      serviceFee: checkoutData.serviceFee,
+      discount: checkoutData.discount,
+      total: Math.round(totalAmount * 100) / 100,
+      paymentMethod: checkoutData.paymentMethod,
+      timestamp: new Date().toISOString(),
+      itemsSummary: Array.from(itemsSummaryMap.values())
+    };
+
+    // 3. INSTANT STATE UPDATES IN REACT
+    const closedOrderIds = new Set(tableOrders.map(o => o.id));
+    setOrders(prev => prev.map(o => closedOrderIds.has(o.id) ? { ...o, status: 'CLOSED' as const } : o));
+
+    if (targetTable) {
+      setRawTables(prev => prev.map(t => t.id === targetTable.id ? {
+        ...t,
+        status: 'FREE' as const,
+        waiter: undefined,
+        customerCount: undefined,
+        openedAt: undefined
+      } : t));
     }
 
-    if (!success) {
-      const tableOrders = orders.filter(o => o.tableId === checkoutData.tableId && o.status !== 'CLOSED');
-      const subtotal = tableOrders.reduce((sum, o) => sum + o.items.reduce((iSum, item) => iSum + (item.price * item.quantity), 0), 0);
-      const totalAmount = subtotal + checkoutData.serviceFee - checkoutData.discount;
-
-      const record: PaymentRecord = {
-        id: `pay-${Date.now()}`,
-        orderId: tableOrders[0]?.id || `ord-${Date.now()}`,
-        tableId: checkoutData.tableId,
-        tableName: tables.find(t => t.id === checkoutData.tableId)?.name || checkoutData.tableId,
-        waiterName: checkoutData.waiterName,
-        subtotal,
-        serviceFee: checkoutData.serviceFee,
-        discount: checkoutData.discount,
-        total: totalAmount,
-        paymentMethod: checkoutData.paymentMethod,
-        timestamp: new Date().toISOString(),
-        itemsSummary: tableOrders.flatMap(o => o.items.map(i => ({ name: i.name, quantity: i.quantity, price: i.price })))
-      };
+    // 4. PERSIST TO FIRESTORE DIRECTLY
+    try {
       await saveFirestorePaymentRecord(record);
 
       for (const ord of tableOrders) {
         await saveFirestoreOrder({ ...ord, status: 'CLOSED' });
       }
 
-      const table = tables.find(t => t.id === checkoutData.tableId);
-      if (table) {
+      if (targetTable) {
         await saveFirestoreTable({
-          id: table.id,
-          number: table.number,
-          name: table.name,
-          capacity: table.capacity,
+          id: targetTable.id,
+          number: targetTable.number,
+          name: targetTable.name,
+          capacity: targetTable.capacity,
           status: 'FREE'
         });
       }
+    } catch (err) {
+      console.error('Error persisting checkout to Firestore:', err);
+    }
+
+    // 5. ALSO POST TO EXPRESS API
+    try {
+      await fetch('/api/orders/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(checkoutData)
+      });
+    } catch {
+      // ignore network failure
     }
 
     await fetchAllData();

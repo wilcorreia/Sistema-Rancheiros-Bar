@@ -1,10 +1,75 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area } from 'recharts';
 import { DollarSign, ShoppingBag, TrendingUp, Calendar, QrCode, CreditCard, Banknote, Award, Download, RefreshCw } from 'lucide-react';
-import { PaymentMethod } from '../types';
+import { PaymentMethod, PaymentRecord } from '../types';
+import { getFirestorePaymentRecords } from '../lib/firestoreService';
 
 interface ReportsViewProps {
   onRefreshData?: () => void;
+}
+
+function calculateSummaryFromRecords(records: PaymentRecord[]) {
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  const todayRecords = records.filter(p => (p.timestamp || '').startsWith(todayStr));
+  const todayTotal = todayRecords.reduce((sum, p) => sum + (Number(p.total) || 0), 0);
+
+  const byPaymentToday = {
+    PIX: todayRecords.filter(p => p.paymentMethod === 'PIX').reduce((sum, p) => sum + (Number(p.total) || 0), 0),
+    CREDIT: todayRecords.filter(p => p.paymentMethod === 'CREDIT').reduce((sum, p) => sum + (Number(p.total) || 0), 0),
+    DEBIT: todayRecords.filter(p => p.paymentMethod === 'DEBIT').reduce((sum, p) => sum + (Number(p.total) || 0), 0),
+    CASH: todayRecords.filter(p => p.paymentMethod === 'CASH').reduce((sum, p) => sum + (Number(p.total) || 0), 0),
+  };
+
+  const last30DaysMap = new Map<string, { date: string; revenue: number; count: number }>();
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
+    const dateKey = d.toISOString().split('T')[0];
+    const displayDate = `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}`;
+    last30DaysMap.set(dateKey, { date: displayDate, revenue: 0, count: 0 });
+  }
+
+  let monthlyTotal = 0;
+  records.forEach(p => {
+    const dateKey = (p.timestamp || '').split('T')[0];
+    monthlyTotal += (Number(p.total) || 0);
+    if (last30DaysMap.has(dateKey)) {
+      const entry = last30DaysMap.get(dateKey)!;
+      entry.revenue = Math.round((entry.revenue + (Number(p.total) || 0)) * 100) / 100;
+      entry.count += 1;
+    }
+  });
+
+  const productSalesMap = new Map<string, { name: string; qty: number; revenue: number }>();
+  records.forEach(p => {
+    (p.itemsSummary || []).forEach(item => {
+      const current = productSalesMap.get(item.name) || { name: item.name, qty: 0, revenue: 0 };
+      current.qty += item.quantity;
+      current.revenue += item.quantity * (Number(item.price) || 0);
+      productSalesMap.set(item.name, current);
+    });
+  });
+
+  const topProducts = Array.from(productSalesMap.values())
+    .sort((a, b) => b.qty - a.qty)
+    .slice(0, 8);
+
+  return {
+    today: {
+      revenue: Math.round(todayTotal * 100) / 100,
+      ordersCount: todayRecords.length,
+      averageTicket: todayRecords.length ? Math.round((todayTotal / todayRecords.length) * 100) / 100 : 0,
+      byPayment: byPaymentToday
+    },
+    monthly: {
+      totalRevenue: Math.round(monthlyTotal * 100) / 100,
+      ordersCount: records.length,
+      averageTicket: records.length ? Math.round((monthlyTotal / records.length) * 100) / 100 : 0
+    },
+    dailyChart: Array.from(last30DaysMap.values()),
+    topProducts,
+    recentTransactions: records.slice(0, 15)
+  };
 }
 
 export const ReportsView: React.FC<ReportsViewProps> = () => {
@@ -15,11 +80,26 @@ export const ReportsView: React.FC<ReportsViewProps> = () => {
   const fetchReports = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch('/api/reports/summary');
-      const data = await res.json();
-      setReportData(data);
+      const firestoreRecords = await getFirestorePaymentRecords();
+      if (firestoreRecords && firestoreRecords.length > 0) {
+        setReportData(calculateSummaryFromRecords(firestoreRecords));
+      } else {
+        const res = await fetch('/api/reports/summary');
+        if (res.ok) {
+          const data = await res.json();
+          setReportData(data);
+        } else {
+          setReportData(calculateSummaryFromRecords([]));
+        }
+      }
     } catch (err) {
       console.error('Error fetching reports:', err);
+      try {
+        const firestoreRecords = await getFirestorePaymentRecords();
+        setReportData(calculateSummaryFromRecords(firestoreRecords || []));
+      } catch {
+        setReportData(calculateSummaryFromRecords([]));
+      }
     } finally {
       setIsLoading(false);
     }
